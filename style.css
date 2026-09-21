@@ -466,8 +466,12 @@ input {
 }
 
 @media (max-width: 800px) {
+  .app-layout {
+    flex-direction: column;
+  }
+
   .sidebar {
-    width: 210px;
+    width: 100%;
   }
 
   .main-content {

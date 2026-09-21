@@ -97,11 +97,23 @@ function findValue(row, aliases, fallback = '') {
   return key === undefined ? fallback : row[key];
 }
 
+function formatDateParts(year, month, day) {
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+function formatLocalDate(date) {
+  return formatDateParts(
+    date.getFullYear(),
+    date.getMonth() + 1,
+    date.getDate()
+  );
+}
+
 function dateKey(value) {
   if (value === null || value === undefined || value === '') return '';
 
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    return value.toISOString().slice(0, 10);
+    return formatLocalDate(value);
   }
 
   if (typeof value === 'number' && window.XLSX?.SSF) {
@@ -119,12 +131,25 @@ function dateKey(value) {
     let year = Number(match[3]);
     if (year < 100) year += 2000;
 
-    return `${year}-${String(Number(match[2])).padStart(2, '0')}-${String(Number(match[1])).padStart(2, '0')}`;
+    return formatDateParts(
+      year,
+      Number(match[2]),
+      Number(match[1])
+    );
+  }
+
+  const isoMatch = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (isoMatch) {
+    return formatDateParts(
+      Number(isoMatch[1]),
+      Number(isoMatch[2]),
+      Number(isoMatch[3])
+    );
   }
 
   const direct = new Date(text);
   if (!Number.isNaN(direct.getTime())) {
-    return direct.toISOString().slice(0, 10);
+    return formatLocalDate(direct);
   }
 
   return '';
