@@ -450,6 +450,23 @@ function buildSumIndex(rows, userAliases, dateAliases, valueAliases) {
   return map;
 }
 
+function buildPresenceIndex(rows, userAliases, dateAliases) {
+  const set = new Set();
+
+  rows.forEach(row => {
+    const key = makeLookupKey(
+      findValue(row, userAliases, ''),
+      dateKey(findValue(row, dateAliases, ''))
+    );
+
+    if (key) {
+      set.add(key);
+    }
+  });
+
+  return set;
+}
+
 function buildTalkTimeIndex(rows) {
   const map = new Map();
 
@@ -481,6 +498,10 @@ function getIndexedValueByCandidates(map, candidates, day) {
   }
 
   return 0;
+}
+
+function hasIndexedCandidate(set, candidates, day) {
+  return candidates.some(candidate => set.has(makeLookupKey(candidate, day)));
 }
 
 function getSourceSummary() {
@@ -610,6 +631,11 @@ async function processData() {
       FIELD_ALIASES.scheduleDate,
       FIELD_ALIASES.scheduleDuration
     );
+    const schedulePresenceIndex = buildPresenceIndex(
+      sourceRows.schedule,
+      FIELD_ALIASES.scheduleAgent,
+      FIELD_ALIASES.scheduleDate
+    );
     const hasSchedule = scheduleIndex.size > 0;
 
     processedMatrixData = sourceRows.structure.map(row => {
@@ -635,8 +661,15 @@ async function processData() {
             teleoptiId
           ], day)
           : 0;
+        const hasScheduleEntry = hasSchedule && hasIndexedCandidate(
+          schedulePresenceIndex,
+          [agentName, loginId, ttsUser, teleoptiId],
+          day
+        );
         const teleScheduleBase = hasSchedule
-          ? scheduleSeconds
+          ? (hasScheduleEntry
+            ? scheduleSeconds
+            : getIndexedValue(structureDurationIndex, teleoptiId, day))
           : getIndexedValue(structureDurationIndex, teleoptiId, day);
         const teleSchedule = teleScheduleBase * 0.9;
         const comp = getIndexedValue(compIndex, teleoptiId, day);
