@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CC Performance Dashboard</title>
 
-  <link rel="stylesheet" href="style_Version3.css">
+  <link rel="stylesheet" href="style.css">
   <link rel="stylesheet"
         href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
@@ -86,12 +86,29 @@
 
             <div class="card-info">
               <h4>Structure Master</h4>
-              <span id="name-struct">سيتم استخدام STR Loss.xlsx تلقائيًا</span>
+              <span id="name-struct">اختياري • سيتم استخدام STR Loss.xlsx تلقائيًا</span>
             </div>
 
             <input type="file" id="file-struct" accept=".xlsx,.xls,.csv" hidden>
             <button class="btn-select"
                     onclick="document.getElementById('file-struct').click()">
+              اختيار
+            </button>
+          </div>
+
+          <div class="upload-card" id="card-schedule">
+            <div class="card-icon">
+              <i class="fa-solid fa-calendar-days"></i>
+            </div>
+
+            <div class="card-info">
+              <h4>Schedule / Scheduled Time per Agent</h4>
+              <span id="name-schedule">اختياري • Agent / Date / Scheduled time • XLSX/XLS/CSV</span>
+            </div>
+
+            <input type="file" id="file-schedule" accept=".xlsx,.xls,.csv" hidden>
+            <button class="btn-select"
+                    onclick="document.getElementById('file-schedule').click()">
               اختيار
             </button>
           </div>
@@ -158,7 +175,7 @@
             </div>
 
             <span class="status-text" id="statusText">
-              جاهز للمعالجة
+              جاهز للمعالجة • Structure تلقائي • Schedule اختياري
             </span>
           </div>
         </div>
@@ -193,8 +210,8 @@
                 <td colspan="15" class="empty-state">
                   <i class="fa-solid fa-file-excel"></i>
                   <p>
-                    ارفع UTL و IR و Compensation ثم اضغط بدء المعالجة.
-                    سيتم استخدام STR Loss.xlsx تلقائيًا.
+                    ارفع Schedule (اختياري) مع UTL و IR و Compensation ثم اضغط بدء المعالجة.
+                    سيتم استخدام STR Loss.xlsx تلقائيًا كملف Structure.
                   </p>
                 </td>
               </tr>
@@ -205,6 +222,6 @@
     </main>
   </div>
 
-  <script src="app_Version2.js"></script>
+  <script src="app.js"></script>
 </body>
 </html>

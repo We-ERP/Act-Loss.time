@@ -51,6 +51,8 @@ input {
 }
 
 .sidebar {
+  display: flex;
+  flex-direction: column;
   width: 260px;
   flex-shrink: 0;
   padding: 20px;
@@ -107,7 +109,7 @@ input {
 }
 
 .sidebar-footer {
-  margin-top: calc(100vh - 300px);
+  margin-top: auto;
   padding-top: 14px;
   border-top: 1px solid rgba(255,255,255,.15);
 }
@@ -233,7 +235,7 @@ input {
 
 .upload-card {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 12px;
   padding: 14px;
   border: 1px dashed var(--line-dark);
@@ -264,15 +266,15 @@ input {
 
 .card-info h4 {
   font-size: 13px;
+  line-height: 1.35;
 }
 
 .card-info span {
   display: block;
-  overflow: hidden;
   color: var(--muted);
   font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.45;
+  white-space: normal;
 }
 
 .btn-select {
@@ -466,8 +468,12 @@ input {
 }
 
 @media (max-width: 800px) {
+  .app-layout {
+    flex-direction: column;
+  }
+
   .sidebar {
-    width: 210px;
+    width: 100%;
   }
 
   .main-content {
