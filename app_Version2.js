@@ -65,6 +65,8 @@ const GROUPED_SCHEDULE_HEADER_ALIASES = [
   ['Planned overtime', 'Planned overtime (hh:mm)', 'Planned overtime (hh:mm:ss)']
 ];
 
+const GROUPED_SCHEDULE_TOTALS_ALIASES = ['Totals', 'Total', 'الإجمالي', 'إجمالي', 'المجموع'];
+
 ['struct', 'schedule', 'utl', 'ir', 'comp'].forEach(key => {
   const input = document.getElementById(`file-${key}`);
   if (input) {
@@ -506,7 +508,7 @@ function rowsFromGroupedScheduleMatrix(matrix) {
       flushPendingDay();
     }
 
-    if (matchesAnyAlias(labelText, ['Totals'])) {
+    if (matchesAnyAlias(labelText, GROUPED_SCHEDULE_TOTALS_ALIASES)) {
       flushPendingDay();
       currentAgent = '';
       return;
