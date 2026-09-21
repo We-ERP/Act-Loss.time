@@ -463,11 +463,35 @@ function extractGroupedScheduleAgentName(label) {
     : '';
 }
 
+function inferGroupedScheduleAgentName(rows, rowIndex, scheduledTimeColumnIndex, labelCell) {
+  if (!/[a-z\u0600-\u06ff]/i.test(labelCell.text)) return '';
+
+  for (let index = rowIndex + 1; index < rows.length; index += 1) {
+    const nextLabelCell = getGroupedScheduleLabelCell(rows[index], scheduledTimeColumnIndex);
+    if (!nextLabelCell) continue;
+
+    if (matchesAnyAlias(nextLabelCell.text, GROUPED_SCHEDULE_TOTALS_ALIASES)) {
+      return '';
+    }
+
+    if (extractGroupedScheduleAgentName(nextLabelCell.text) || nextLabelCell.index <= labelCell.index) {
+      return '';
+    }
+
+    if (monthFirstDateKey(nextLabelCell.value)) {
+      return labelCell.text.trim();
+    }
+  }
+
+  return '';
+}
+
 function rowsFromGroupedScheduleMatrix(matrix) {
   const headerInfo = detectGroupedScheduleHeader(matrix);
   if (!headerInfo) return null;
 
   const { headerRowIndex, scheduledTimeColumnIndex } = headerInfo;
+  const dataRows = matrix.slice(headerRowIndex + 1);
   const rows = [];
   let currentAgent = '';
   let pendingDay = null;
@@ -491,13 +515,14 @@ function rowsFromGroupedScheduleMatrix(matrix) {
     pendingDay = null;
   }
 
-  matrix.slice(headerRowIndex + 1).forEach(row => {
+  dataRows.forEach((row, rowIndex) => {
     const labelCell = getGroupedScheduleLabelCell(row, scheduledTimeColumnIndex);
     if (!labelCell) return;
 
     const labelText = labelCell.text;
     const day = monthFirstDateKey(labelCell.value);
-    const agentName = extractGroupedScheduleAgentName(labelText);
+    const agentName = extractGroupedScheduleAgentName(labelText) ||
+      inferGroupedScheduleAgentName(dataRows, rowIndex, scheduledTimeColumnIndex, labelCell);
 
     if (
       pendingDay &&
