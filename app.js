@@ -113,17 +113,17 @@ function dateKey(value) {
   const text = String(value).trim();
   if (!text) return '';
 
-  const direct = new Date(text);
-  if (!Number.isNaN(direct.getTime())) {
-    return direct.toISOString().slice(0, 10);
-  }
-
   const match = text.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
   if (match) {
     let year = Number(match[3]);
     if (year < 100) year += 2000;
 
     return `${year}-${String(Number(match[2])).padStart(2, '0')}-${String(Number(match[1])).padStart(2, '0')}`;
+  }
+
+  const direct = new Date(text);
+  if (!Number.isNaN(direct.getTime())) {
+    return direct.toISOString().slice(0, 10);
   }
 
   return '';
@@ -396,13 +396,14 @@ function getDatesFromRows(rows, aliases) {
 
 function getStructureDates(rows) {
   const dates = getDatesFromRows(rows, FIELD_ALIASES.structureDate);
+  const fallbackYear = [...dates][0]?.slice(0, 4) || String(new Date().getFullYear());
 
   rows.forEach(row => {
     Object.keys(row).forEach(key => {
       const match = key.match(/^(\d{1,2})[-\/](Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)$/i);
 
       if (match) {
-        const parsed = new Date(`${match[1]} ${match[2]} 2024`);
+        const parsed = new Date(`${match[1]} ${match[2]} ${fallbackYear}`);
         if (!Number.isNaN(parsed.getTime())) {
           dates.add(parsed.toISOString().slice(0, 10));
         }
