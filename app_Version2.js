@@ -431,7 +431,7 @@ function getStructureDates(rows) {
       if (match) {
         const parsed = new Date(`${match[1]} ${match[2]} ${fallbackYear}`);
         if (!Number.isNaN(parsed.getTime())) {
-          dates.add(parsed.toISOString().slice(0, 10));
+          dates.add(formatLocalDate(parsed));
         }
       }
     });
@@ -476,18 +476,17 @@ function buildSumIndex(rows, userAliases, dateAliases, valueAliases) {
   return map;
 }
 
-function buildUsableDurationIndex(rows, userAliases, dateAliases, valueAliases) {
+function buildDurationPresenceIndex(rows, userAliases, dateAliases, valueAliases) {
   const set = new Set();
 
   rows.forEach(row => {
     const rawValue = findValue(row, valueAliases, '');
-    const seconds = parseSeconds(rawValue);
     const key = makeLookupKey(
       findValue(row, userAliases, ''),
       dateKey(findValue(row, dateAliases, ''))
     );
 
-    if (key && String(rawValue ?? '').trim() !== '' && seconds > 0) {
+    if (key && String(rawValue ?? '').trim() !== '') {
       set.add(key);
     }
   });
@@ -517,15 +516,19 @@ function getIndexedValue(map, value, day) {
   return map.get(makeLookupKey(value, day)) || 0;
 }
 
-function getUsableIndexedValueByCandidates(map, usableSet, candidates, day) {
+function getPresentIndexedValueByCandidates(map, presenceSet, candidates, day) {
   for (const candidate of candidates) {
     const key = makeLookupKey(candidate, day);
-    if (usableSet.has(key)) {
+    if (presenceSet.has(key)) {
       return map.get(key) || 0;
     }
   }
 
   return 0;
+}
+
+function hasPresentCandidate(presenceSet, candidates, day) {
+  return candidates.some(candidate => presenceSet.has(makeLookupKey(candidate, day)));
 }
 
 function getSourceSummary() {
@@ -655,7 +658,7 @@ async function processData() {
       FIELD_ALIASES.scheduleDate,
       FIELD_ALIASES.scheduleDuration
     );
-    const scheduleUsableDurationIndex = buildUsableDurationIndex(
+    const scheduleDurationPresenceIndex = buildDurationPresenceIndex(
       sourceRows.schedule,
       FIELD_ALIASES.scheduleAgent,
       FIELD_ALIASES.scheduleDate,
@@ -680,15 +683,20 @@ async function processData() {
         const talkTime = getIndexedValue(talkTimeIndex, loginId, day);
 
         const scheduleSeconds = hasSchedule
-          ? getUsableIndexedValueByCandidates(
+          ? getPresentIndexedValueByCandidates(
             scheduleIndex,
-            scheduleUsableDurationIndex,
+            scheduleDurationPresenceIndex,
             scheduleCandidates,
             day
           )
           : 0;
+        const hasScheduleDuration = hasSchedule && hasPresentCandidate(
+          scheduleDurationPresenceIndex,
+          scheduleCandidates,
+          day
+        );
         const teleScheduleBase = hasSchedule
-          ? (scheduleSeconds > 0
+          ? (hasScheduleDuration
             ? scheduleSeconds
             : getIndexedValue(structureDurationIndex, teleoptiId, day))
           : getIndexedValue(structureDurationIndex, teleoptiId, day);
