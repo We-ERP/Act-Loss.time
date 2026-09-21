@@ -450,16 +450,18 @@ function buildSumIndex(rows, userAliases, dateAliases, valueAliases) {
   return map;
 }
 
-function buildPresenceIndex(rows, userAliases, dateAliases) {
+function buildUsableDurationIndex(rows, userAliases, dateAliases, valueAliases) {
   const set = new Set();
 
   rows.forEach(row => {
+    const rawValue = findValue(row, valueAliases, '');
+    const seconds = parseSeconds(rawValue);
     const key = makeLookupKey(
       findValue(row, userAliases, ''),
       dateKey(findValue(row, dateAliases, ''))
     );
 
-    if (key) {
+    if (key && String(rawValue ?? '').trim() !== '' && seconds > 0) {
       set.add(key);
     }
   });
@@ -631,10 +633,11 @@ async function processData() {
       FIELD_ALIASES.scheduleDate,
       FIELD_ALIASES.scheduleDuration
     );
-    const schedulePresenceIndex = buildPresenceIndex(
+    const scheduleUsableDurationIndex = buildUsableDurationIndex(
       sourceRows.schedule,
       FIELD_ALIASES.scheduleAgent,
-      FIELD_ALIASES.scheduleDate
+      FIELD_ALIASES.scheduleDate,
+      FIELD_ALIASES.scheduleDuration
     );
     const hasSchedule = scheduleIndex.size > 0;
 
@@ -661,13 +664,13 @@ async function processData() {
             teleoptiId
           ], day)
           : 0;
-        const hasScheduleEntry = hasSchedule && hasIndexedCandidate(
-          schedulePresenceIndex,
+        const hasUsableScheduleDuration = hasSchedule && hasIndexedCandidate(
+          scheduleUsableDurationIndex,
           [agentName, loginId, ttsUser, teleoptiId],
           day
         );
         const teleScheduleBase = hasSchedule
-          ? (hasScheduleEntry
+          ? (hasUsableScheduleDuration
             ? scheduleSeconds
             : getIndexedValue(structureDurationIndex, teleoptiId, day))
           : getIndexedValue(structureDurationIndex, teleoptiId, day);
