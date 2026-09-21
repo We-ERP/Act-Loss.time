@@ -196,11 +196,19 @@ function monthFirstDateKey(value) {
 
   let year = Number(match[3]);
   if (year < 100) year += 2000;
+  const first = Number(match[1]);
+  const second = Number(match[2]);
+  const month = second > 12 && first <= 12
+    ? first
+    : (first > 12 && second <= 12 ? second : first);
+  const day = second > 12 && first <= 12
+    ? second
+    : (first > 12 && second <= 12 ? first : second);
 
   return formatDateParts(
     year,
-    Number(match[1]),
-    Number(match[2])
+    month,
+    day
   );
 }
 
