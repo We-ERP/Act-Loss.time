@@ -450,7 +450,7 @@ function getGroupedScheduleLabelCell(row, scheduledTimeColumnIndex) {
   return null;
 }
 
-function extractGroupedScheduleAgentName(label) {
+function extractGroupedScheduleNumberPrefixedAgentName(label) {
   const match = String(label ?? '')
     .trim()
     .match(/^\d+\s+(.+?)(?:\s+\d+)?$/);
@@ -474,7 +474,10 @@ function inferGroupedScheduleAgentName(rows, rowIndex, scheduledTimeColumnIndex,
       return '';
     }
 
-    if (extractGroupedScheduleAgentName(nextLabelCell.text) || nextLabelCell.index <= labelCell.index) {
+    if (
+      extractGroupedScheduleNumberPrefixedAgentName(nextLabelCell.text) ||
+      nextLabelCell.index <= labelCell.index
+    ) {
       return '';
     }
 
@@ -484,6 +487,11 @@ function inferGroupedScheduleAgentName(rows, rowIndex, scheduledTimeColumnIndex,
   }
 
   return '';
+}
+
+function resolveGroupedScheduleAgentName(rows, rowIndex, scheduledTimeColumnIndex, labelCell) {
+  return extractGroupedScheduleNumberPrefixedAgentName(labelCell.text) ||
+    inferGroupedScheduleAgentName(rows, rowIndex, scheduledTimeColumnIndex, labelCell);
 }
 
 function rowsFromGroupedScheduleMatrix(matrix) {
@@ -521,8 +529,12 @@ function rowsFromGroupedScheduleMatrix(matrix) {
 
     const labelText = labelCell.text;
     const day = monthFirstDateKey(labelCell.value);
-    const agentName = extractGroupedScheduleAgentName(labelText) ||
-      inferGroupedScheduleAgentName(dataRows, rowIndex, scheduledTimeColumnIndex, labelCell);
+    const agentName = resolveGroupedScheduleAgentName(
+      dataRows,
+      rowIndex,
+      scheduledTimeColumnIndex,
+      labelCell
+    );
 
     if (
       pendingDay &&
