@@ -1065,12 +1065,36 @@ function renderMatrixTable(rows) {
   });
 
   dateGroups.forEach(day => {
-    if (collapsedDays[day]) return;
-
+    const isCollapsed = Boolean(collapsedDays[day]);
     const th = document.createElement('th');
-    th.colSpan = 7;
+    th.colSpan = isCollapsed ? 1 : 7;
+    th.rowSpan = isCollapsed ? 2 : 1;
     th.className = 'th-date-group';
-    th.textContent = displayDate(day);
+
+    const content = document.createElement('span');
+    content.className = 'th-date-content';
+
+    const dateText = document.createElement('span');
+    dateText.textContent = displayDate(day);
+
+    const toggleButton = document.createElement('button');
+    toggleButton.type = 'button';
+    toggleButton.className = 'th-day-toggle';
+    toggleButton.setAttribute(
+      'aria-label',
+      isCollapsed ? `توسيع يوم ${displayDate(day)}` : `طي يوم ${displayDate(day)}`
+    );
+    toggleButton.innerHTML = `<i class="fa-solid ${isCollapsed ? 'fa-chevron-left' : 'fa-chevron-down'}"></i>`;
+    toggleButton.onclick = event => {
+      event.stopPropagation();
+      collapsedDays[day] = !collapsedDays[day];
+      buildGroupToggles();
+      renderMatrixTable(processedMatrixData);
+    };
+
+    content.appendChild(dateText);
+    content.appendChild(toggleButton);
+    th.appendChild(content);
     firstHeader.appendChild(th);
   });
 
@@ -1116,7 +1140,13 @@ function renderMatrixTable(rows) {
     });
 
     dateGroups.forEach(day => {
-      if (collapsedDays[day]) return;
+      if (collapsedDays[day]) {
+        const td = document.createElement('td');
+        td.className = 'day-collapsed-cell';
+        td.textContent = '—';
+        tr.appendChild(td);
+        return;
+      }
 
       const values = row.days[day] || {};
       const lossText = String(values.lossTime ?? '');
@@ -1140,9 +1170,10 @@ function renderMatrixTable(rows) {
       ].forEach((value, index) => {
         const td = document.createElement('td');
         td.textContent = value;
+        td.classList.add('day-metric-cell');
 
         if (index === 6) {
-          td.className = lossClass;
+          td.classList.add(lossClass);
         }
 
         tr.appendChild(td);

@@ -53,7 +53,7 @@ input {
 .sidebar {
   display: flex;
   flex-direction: column;
-  width: 260px;
+  width: clamp(210px, 20vw, 260px);
   flex-shrink: 0;
   padding: 20px;
   color: #fff;
@@ -136,6 +136,7 @@ input {
 .main-content {
   display: flex;
   flex: 1;
+  min-width: 0;
   flex-direction: column;
   gap: 18px;
   padding: 28px;
@@ -155,8 +156,17 @@ input {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 18px;
   padding: 20px 24px;
+  position: sticky;
+  top: 0;
+  z-index: 40;
+}
+
+.header-title {
+  flex: 1 1 340px;
+  min-width: 280px;
 }
 
 .header-title h1 {
@@ -173,7 +183,12 @@ input {
 
 .header-actions {
   display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
   gap: 12px;
+  min-width: 240px;
 }
 
 .btn,
@@ -387,11 +402,35 @@ input {
 
 .table-container {
   max-height: 68vh;
-  overflow: auto;
+  overflow-x: auto;
+  overflow-y: auto;
+  scrollbar-width: auto;
+  scrollbar-color: #8a3a3a #f4e6e6;
+}
+
+.table-container::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+.table-container::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: #f4e6e6;
+}
+
+.table-container::-webkit-scrollbar-thumb {
+  border: 2px solid #f4e6e6;
+  border-radius: 999px;
+  background: linear-gradient(#a53f3f, #6c1717);
+}
+
+.table-container::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(#b34a4a, #7b1f1f);
 }
 
 .report-table {
-  width: 100%;
+  width: max-content;
+  min-width: 100%;
   border-collapse: collapse;
   text-align: center;
   white-space: nowrap;
@@ -416,17 +455,51 @@ input {
   background: linear-gradient(#842121, var(--red-dark));
 }
 
+.th-date-content {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.th-day-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 999px;
+  color: inherit;
+  background: rgba(255,255,255,.16);
+  cursor: pointer;
+}
+
+.th-day-toggle:hover {
+  background: rgba(255,255,255,.3);
+}
+
 .th-sub-orange {
   background: linear-gradient(#db4040, #951818);
+  min-width: 108px;
 }
 
 .th-sub-purple {
   background: linear-gradient(#8b2222, #5a0d0d);
+  min-width: 108px;
 }
 
 .report-table td {
   padding: 6px 10px;
   border: 1px solid var(--line);
+}
+
+.day-metric-cell {
+  min-width: 108px;
+}
+
+.day-collapsed-cell {
+  min-width: 74px;
+  color: var(--muted);
 }
 
 .report-table tbody tr:nth-child(even) {
