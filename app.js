@@ -1,5 +1,6 @@
 let rawStructureData = [];
 let processedMatrixData = [];
+let visibleMatrixData = [];
 let dateGroups = [];
 let collapsedDays = {};
 
@@ -491,19 +492,15 @@ function getIndexedValue(map, value, day) {
   return map.get(makeLookupKey(value, day)) || 0;
 }
 
-function getIndexedValueByCandidates(map, candidates, day) {
+function getUsableIndexedValueByCandidates(map, usableSet, candidates, day) {
   for (const candidate of candidates) {
-    const result = getIndexedValue(map, candidate, day);
-    if (result) {
-      return result;
+    const key = makeLookupKey(candidate, day);
+    if (usableSet.has(key)) {
+      return map.get(key) || 0;
     }
   }
 
   return 0;
-}
-
-function hasIndexedCandidate(set, candidates, day) {
-  return candidates.some(candidate => set.has(makeLookupKey(candidate, day)));
 }
 
 function getSourceSummary() {
@@ -648,6 +645,7 @@ async function processData() {
       const ttsUser = findValue(row, FIELD_ALIASES.ttsUser);
       const tlName = findValue(row, FIELD_ALIASES.tlName);
       const statusValue = findValue(row, FIELD_ALIASES.status, 'Active');
+      const scheduleCandidates = [agentName, loginId, ttsUser, teleoptiId];
       const days = {};
 
       dateGroups.forEach(day => {
@@ -657,20 +655,15 @@ async function processData() {
         const talkTime = getIndexedValue(talkTimeIndex, loginId, day);
 
         const scheduleSeconds = hasSchedule
-          ? getIndexedValueByCandidates(scheduleIndex, [
-            agentName,
-            loginId,
-            ttsUser,
-            teleoptiId
-          ], day)
+          ? getUsableIndexedValueByCandidates(
+            scheduleIndex,
+            scheduleUsableDurationIndex,
+            scheduleCandidates,
+            day
+          )
           : 0;
-        const hasUsableScheduleDuration = hasSchedule && hasIndexedCandidate(
-          scheduleUsableDurationIndex,
-          [agentName, loginId, ttsUser, teleoptiId],
-          day
-        );
         const teleScheduleBase = hasSchedule
-          ? (hasUsableScheduleDuration
+          ? (scheduleSeconds > 0
             ? scheduleSeconds
             : getIndexedValue(structureDurationIndex, teleoptiId, day))
           : getIndexedValue(structureDurationIndex, teleoptiId, day);
@@ -739,6 +732,7 @@ function buildGroupToggles() {
 function renderMatrixTable(rows) {
   const head = document.getElementById('tableHead');
   const body = document.getElementById('tableBody');
+  visibleMatrixData = [...rows];
 
   document.getElementById('rowCount').textContent =
     `عدد الموظفين: ${rows.length}`;
@@ -891,12 +885,50 @@ function filterData() {
 }
 
 function exportToExcel() {
-  if (!processedMatrixData.length) {
+  const exportRows = buildExportRows(visibleMatrixData.length ? visibleMatrixData : processedMatrixData);
+
+  if (!exportRows.length) {
     alert('لا توجد بيانات للتصدير');
     return;
   }
 
-  const rows = processedMatrixData.map(row => {
+  const workbook = XLSX.utils.book_new();
+  const worksheet = XLSX.utils.json_to_sheet(exportRows);
+
+  XLSX.utils.book_append_sheet(
+    workbook,
+    worksheet,
+    'Matrix_Report'
+  );
+
+  XLSX.writeFile(
+    workbook,
+    'CallCenter_Daily_Performance_Report.xlsx'
+  );
+}
+
+function exportToCSV() {
+  const exportRows = buildExportRows(visibleMatrixData.length ? visibleMatrixData : processedMatrixData);
+
+  if (!exportRows.length) {
+    alert('لا توجد بيانات للتصدير');
+    return;
+  }
+
+  const worksheet = XLSX.utils.json_to_sheet(exportRows);
+  const csv = XLSX.utils.sheet_to_csv(worksheet);
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+
+  link.href = url;
+  link.download = 'CallCenter_Daily_Performance_Report.csv';
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function buildExportRows(rows) {
+  return rows.map(row => {
     const result = {
       'Teleopti ID': row.teleoptiId,
       'Login ID': row.loginId,
@@ -921,22 +953,4 @@ function exportToExcel() {
 
     return result;
   });
-
-  const workbook = XLSX.utils.book_new();
-  const worksheet = XLSX.utils.json_to_sheet(rows);
-
-  XLSX.utils.book_append_sheet(
-    workbook,
-    worksheet,
-    'Matrix_Report'
-  );
-
-  XLSX.writeFile(
-    workbook,
-    'CallCenter_Daily_Performance_Report.xlsx'
-  );
-}
-
-function exportToCSV() {
-  exportToExcel();
 }
