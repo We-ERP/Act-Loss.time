@@ -3,123 +3,179 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>نظام إدارة ومتابعة أداء الـ Call Center | Enterprise Dashboard</title>
-  <link rel="stylesheet" href="style.css">
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-  <!-- مكتبة SheetJS لمعالجة ملفات الإكسيل والـ Multi-sheet -->
+  <title>CC Performance Dashboard</title>
+
+  <link rel="stylesheet" href="style_Version3.css">
+  <link rel="stylesheet"
+        href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 </head>
-<body>
 
+<body>
   <div class="app-layout">
-    <!-- الشريط الجانبي navigation -->
     <aside class="sidebar">
       <div class="brand">
         <i class="fa-solid fa-chart-line logo-icon"></i>
         <div class="brand-text">
           <h2>CC Performance</h2>
-          <span>Enterprise Suite v2.5</span>
+          <span>Daily Loss Time Dashboard</span>
         </div>
       </div>
 
       <nav class="nav-menu">
-        <a href="#" class="active"><i class="fa-solid fa-table-cells"></i> التقرير اليومي المدمج</a>
-        <a href="#"><i class="fa-solid fa-file-arrow-up"></i> رفع الملفات</a>
-        <a href="#"><i class="fa-solid fa-users"></i> فريق العمل (TLs)</a>
-        <a href="#"><i class="fa-solid fa-gear"></i> الإعدادات</a>
+        <a href="#" class="active">
+          <i class="fa-solid fa-table-cells"></i>
+          التقرير اليومي
+        </a>
+        <a href="#uploadSection">
+          <i class="fa-solid fa-file-arrow-up"></i>
+          رفع الملفات
+        </a>
+        <a href="#matrixTable">
+          <i class="fa-solid fa-users"></i>
+          أداء الموظفين
+        </a>
+        <a href="#settings">
+          <i class="fa-solid fa-gear"></i>
+          الإعدادات
+        </a>
       </nav>
 
       <div class="sidebar-footer">
         <div class="user-status">
           <span class="status-badge live"></span>
-          <span>المُعالج متصل ومستعد</span>
+          <span>النظام جاهز للمعالجة</span>
         </div>
       </div>
     </aside>
 
-    <!-- المحتوى الرئيسي -->
     <main class="main-content">
-      
-      <!-- الهيدر العلوي -->
       <header class="top-header">
         <div class="header-title">
-          <h1>جدول التقرير التجميعي اليومي (Daily Performance Matrix)</h1>
-          <p>عرض تفصيلي لأداء الموظفين مقسم حسب الأيام (Date Groups) وحساب الـ Loss Time أوتوماتيكياً</p>
+          <h1>Daily Performance Matrix</h1>
+          <p>
+            تقرير يومي شامل لحساب Assigning Tkts و TKT و Talk Time و Loss Time
+          </p>
         </div>
+
         <div class="header-actions">
-          <button class="btn btn-outline" onclick="exportToCSV()"><i class="fa-solid fa-file-csv"></i> تصدير CSV</button>
-          <button class="btn btn-primary" onclick="exportToExcel()"><i class="fa-solid fa-file-excel"></i> تصدير Excel المحدث</button>
+          <button class="btn btn-outline" onclick="exportToCSV()">
+            <i class="fa-solid fa-file-csv"></i>
+            تصدير CSV
+          </button>
+
+          <button class="btn btn-primary" onclick="exportToExcel()">
+            <i class="fa-solid fa-file-excel"></i>
+            تصدير Excel
+          </button>
         </div>
       </header>
 
-      <!-- كروت الرفع والمعالجة -->
-      <section class="upload-section">
+      <section class="upload-section" id="uploadSection">
         <div class="section-title">
           <i class="fa-solid fa-cloud-arrow-up"></i>
-          <h3>تحميل الشيتات ومعالجة المجموعات اليومية</h3>
+          <h3>تحميل الشيتات ومعالجة البيانات</h3>
         </div>
 
         <div class="upload-grid">
           <div class="upload-card" id="card-struct">
-            <div class="card-icon"><i class="fa-solid fa-sitemap"></i></div>
-            <div class="card-info">
-              <h4>Structure Master Sheet</h4>
-              <span id="name-struct">لم يتم تحميل الشيت الرئيسي</span>
+            <div class="card-icon">
+              <i class="fa-solid fa-sitemap"></i>
             </div>
-            <input type="file" id="file-struct" accept=".xlsx, .xls, .csv" hidden>
-            <button class="btn-select" onclick="document.getElementById('file-struct').click()">اختيار</button>
+
+            <div class="card-info">
+              <h4>Structure Master</h4>
+              <span id="name-struct">سيتم استخدام STR Loss.xlsx تلقائيًا</span>
+            </div>
+
+            <input type="file" id="file-struct" accept=".xlsx,.xls,.csv" hidden>
+            <button class="btn-select"
+                    onclick="document.getElementById('file-struct').click()">
+              اختيار
+            </button>
           </div>
 
           <div class="upload-card" id="card-utl">
-            <div class="card-icon"><i class="fa-solid fa-phone-volume"></i></div>
+            <div class="card-icon">
+              <i class="fa-solid fa-phone-volume"></i>
+            </div>
+
             <div class="card-info">
               <h4>UTL Logs</h4>
-              <span id="name-utl">اختياري للتحديث</span>
+              <span id="name-utl">Hold + Other + AUX + ACW</span>
             </div>
-            <input type="file" id="file-utl" accept=".xlsx, .xls, .csv" hidden>
-            <button class="btn-select" onclick="document.getElementById('file-utl').click()">اختيار</button>
+
+            <input type="file" id="file-utl" accept=".xlsx,.xls,.csv" hidden>
+            <button class="btn-select"
+                    onclick="document.getElementById('file-utl').click()">
+              اختيار
+            </button>
           </div>
 
           <div class="upload-card" id="card-ir">
-            <div class="card-icon"><i class="fa-solid fa-ticket"></i></div>
-            <div class="card-info">
-              <h4>IR Tickets File</h4>
-              <span id="name-ir">اختياري للتحديث</span>
+            <div class="card-icon">
+              <i class="fa-solid fa-ticket"></i>
             </div>
-            <input type="file" id="file-ir" accept=".xlsx, .xls, .csv" hidden>
-            <button class="btn-select" onclick="document.getElementById('file-ir').click()">اختيار</button>
+
+            <div class="card-info">
+              <h4>IR Tickets</h4>
+              <span id="name-ir">User: added_by / Date: added_on</span>
+            </div>
+
+            <input type="file" id="file-ir" accept=".xlsx,.xls,.csv" hidden>
+            <button class="btn-select"
+                    onclick="document.getElementById('file-ir').click()">
+              اختيار
+            </button>
           </div>
 
           <div class="upload-card" id="card-comp">
-            <div class="card-icon"><i class="fa-solid fa-clock-rotate-left"></i></div>
-            <div class="card-info">
-              <h4>Compensation Log</h4>
-              <span id="name-comp">اختياري للتحديث</span>
+            <div class="card-icon">
+              <i class="fa-solid fa-clock-rotate-left"></i>
             </div>
-            <input type="file" id="file-comp" accept=".xlsx, .xls, .csv" hidden>
-            <button class="btn-select" onclick="document.getElementById('file-comp').click()">اختيار</button>
+
+            <div class="card-info">
+              <h4>Compensation</h4>
+              <span id="name-comp">Comp_Du / Comp_ID / Comp_Da</span>
+            </div>
+
+            <input type="file" id="file-comp" accept=".xlsx,.xls,.csv" hidden>
+            <button class="btn-select"
+                    onclick="document.getElementById('file-comp').click()">
+              اختيار
+            </button>
           </div>
 
           <div class="action-card">
             <button class="btn-run" id="btnRun" onclick="processData()">
-              <i class="fa-solid fa-bolt"></i> بدء المعالجة وإنشاء التقرير
+              <i class="fa-solid fa-bolt"></i>
+              بدء المعالجة وإنشاء التقرير
             </button>
-            <div class="progress-bar"><div class="progress-fill" id="progressBar"></div></div>
-            <span class="status-text" id="statusText">جاهز لتلقي الشيتات</span>
+
+            <div class="progress-bar">
+              <div class="progress-fill" id="progressBar"></div>
+            </div>
+
+            <span class="status-text" id="statusText">
+              جاهز للمعالجة
+            </span>
           </div>
         </div>
       </section>
 
-      <!-- شريط أدوات الجدول والفلاتر -->
-      <section class="table-controls">
+      <section class="table-controls" id="settings">
         <div class="search-box">
           <i class="fa-solid fa-magnifying-glass"></i>
-          <input type="text" id="searchInput" placeholder="بحث باسم الموظف، الـ Login ID، أو الـ TL Name..." oninput="filterData()">
+          <input
+            type="search"
+            id="searchInput"
+            placeholder="بحث بالاسم أو Login ID أو TL Name..."
+            oninput="filterData()">
         </div>
 
         <div class="group-toggles" id="groupToggles">
-          <span class="control-label">التحكم في مجموعات الأيام:</span>
-          <!-- سيتم توليد أزرار فتح وإغلاق أيام التقرير ديناميكياً -->
+          <span class="control-label">سيتم عرض التواريخ بعد المعالجة</span>
         </div>
 
         <div class="view-stats">
@@ -127,28 +183,28 @@
         </div>
       </section>
 
-      <!-- الجدول الرئيسي المطابق للصورة -->
       <section class="table-wrapper">
         <div class="table-container">
           <table class="report-table" id="matrixTable">
-            <thead id="tableHead">
-              <!-- سيتم إنشاء صفوف الهيدر المزدوجة بواسطة JS لتطابق الصورة تماماً -->
-            </thead>
+            <thead id="tableHead"></thead>
+
             <tbody id="tableBody">
               <tr>
                 <td colspan="15" class="empty-state">
                   <i class="fa-solid fa-file-excel"></i>
-                  <p>قم برفع ملف الـ Structure واضغط على "بدء المعالجة" لفتح الجدول بنفس التنسيق المطلوب</p>
+                  <p>
+                    ارفع UTL و IR و Compensation ثم اضغط بدء المعالجة.
+                    سيتم استخدام STR Loss.xlsx تلقائيًا.
+                  </p>
                 </td>
               </tr>
             </tbody>
           </table>
         </div>
       </section>
-
     </main>
   </div>
 
-  <script src="app.js"></script>
+  <script src="app_Version2.js"></script>
 </body>
 </html>
