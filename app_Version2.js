@@ -28,10 +28,14 @@ const sourceLabels = {
 const FIELD_ALIASES = {
   structureId: ['Teleopti ID', 'Teleopti', 'ST_ID'],
   loginId: ['Login ID', 'Login', 'UL_lo', 'User', 'Username'],
-  agentName: ['Agent Name', 'Agent', 'Name'],
+  perm: ['Perm'],
   ttsUser: ['TTS User', 'TTS'],
-  tlName: ['TL Name', 'Team Leader', 'TL'],
+  bssUser: ['BSS User', 'BSS'],
+  group: ['Group'],
+  agentName: ['Agent Name', 'Agent', 'Name'],
   status: ['Status'],
+  tlId: ['TL ID', 'TL Id'],
+  tlName: ['TL Name', 'Team Leader', 'TL'],
   irUser: ['added_by', 'IR_L_E', 'User', 'Login ID'],
   irAssigned: ['assigned_to'],
   irDate: ['added_on', 'Date'],
@@ -66,6 +70,27 @@ const GROUPED_SCHEDULE_HEADER_ALIASES = [
 ];
 
 const GROUPED_SCHEDULE_TOTALS_ALIASES = ['Totals', 'Total', 'الإجمالي', 'إجمالي', 'المجموع'];
+const BASE_COLUMN_LABELS = [
+  'Teleopti ID',
+  'Login ID',
+  'Perm',
+  'TTS User',
+  'BSS User',
+  'Group',
+  'Agent Name',
+  'Status',
+  'TL ID',
+  'TL Name'
+];
+const DAY_METRIC_LABELS = [
+  'Assigning Tkts',
+  'TKT',
+  'System',
+  'Talk Time',
+  'Tele-SCH',
+  'Comp',
+  'Loss Time'
+];
 
 ['struct', 'schedule', 'utl', 'ir', 'comp'].forEach(key => {
   const input = document.getElementById(`file-${key}`);
@@ -800,6 +825,31 @@ function getSourceSummary() {
   ].join(' | ');
 }
 
+function getVisibleDayColumnCount() {
+  return dateGroups.reduce(
+    (total, day) => total + (collapsedDays[day] ? 1 : DAY_METRIC_LABELS.length),
+    0
+  );
+}
+
+function getEmptyStateColspan() {
+  return BASE_COLUMN_LABELS.length + getVisibleDayColumnCount();
+}
+
+function getPreferredDateGroups() {
+  const utlDates = [...getDatesFromRows(sourceRows.utl, FIELD_ALIASES.utlDate)].sort();
+  if (utlDates.length) return utlDates;
+
+  return [...getStructureDates(sourceRows.structure)].sort();
+}
+
+function collapseAllDateGroups() {
+  collapsedDays = {};
+  dateGroups.forEach(day => {
+    collapsedDays[day] = true;
+  });
+}
+
 async function processData() {
   const progress = document.getElementById('progressBar');
   const status = document.getElementById('statusText');
@@ -875,15 +925,7 @@ async function processData() {
 
     rawStructureData = sourceRows.structure;
 
-    const dates = new Set();
-
-    getStructureDates(sourceRows.structure).forEach(day => dates.add(day));
-    getDatesFromRows(sourceRows.schedule, FIELD_ALIASES.scheduleDate).forEach(day => dates.add(day));
-    getDatesFromRows(sourceRows.utl, FIELD_ALIASES.utlDate).forEach(day => dates.add(day));
-    getDatesFromRows(sourceRows.ir, FIELD_ALIASES.irDate).forEach(day => dates.add(day));
-    getDatesFromRows(sourceRows.comp, FIELD_ALIASES.compDate).forEach(day => dates.add(day));
-
-    dateGroups = [...dates].sort();
+    dateGroups = getPreferredDateGroups();
 
     if (!dateGroups.length) {
       throw new Error('لم يتم العثور على أي تاريخ داخل الشيتات');
@@ -932,10 +974,14 @@ async function processData() {
     processedMatrixData = sourceRows.structure.map(row => {
       const teleoptiId = findValue(row, FIELD_ALIASES.structureId);
       const loginId = findValue(row, FIELD_ALIASES.loginId);
-      const agentName = findValue(row, FIELD_ALIASES.agentName);
+      const perm = findValue(row, FIELD_ALIASES.perm);
       const ttsUser = findValue(row, FIELD_ALIASES.ttsUser);
-      const tlName = findValue(row, FIELD_ALIASES.tlName);
+      const bssUser = findValue(row, FIELD_ALIASES.bssUser);
+      const group = findValue(row, FIELD_ALIASES.group);
+      const agentName = findValue(row, FIELD_ALIASES.agentName);
       const statusValue = findValue(row, FIELD_ALIASES.status, 'Active');
+      const tlId = findValue(row, FIELD_ALIASES.tlId);
+      const tlName = findValue(row, FIELD_ALIASES.tlName);
       const scheduleCandidates = [agentName, loginId, ttsUser, teleoptiId];
       const days = {};
 
@@ -984,13 +1030,19 @@ async function processData() {
       return {
         teleoptiId,
         loginId,
-        agentName,
+        perm,
         ttsUser,
-        tlName,
+        bssUser,
+        group,
+        agentName,
         status: statusValue,
+        tlId,
+        tlName,
         days
       };
     });
+
+    collapseAllDateGroups();
 
     progress.style.width = '100%';
     status.textContent = `تم تحديث التقرير بنجاح • ${getSourceSummary()}`;
@@ -1039,7 +1091,7 @@ function renderMatrixTable(rows) {
   if (!rows.length) {
     body.innerHTML = `
       <tr>
-        <td colspan="15" class="empty-state">
+        <td colspan="${getEmptyStateColspan()}" class="empty-state">
           لا توجد بيانات للعرض
         </td>
       </tr>
@@ -1049,14 +1101,7 @@ function renderMatrixTable(rows) {
 
   const firstHeader = document.createElement('tr');
 
-  [
-    'Teleopti ID',
-    'Login ID',
-    'Agent Name',
-    'TTS User',
-    'TL Name',
-    'Status'
-  ].forEach(label => {
+  BASE_COLUMN_LABELS.forEach(label => {
     const th = document.createElement('th');
     th.rowSpan = 2;
     th.className = 'th-base';
@@ -1105,15 +1150,7 @@ function renderMatrixTable(rows) {
   dateGroups.forEach(day => {
     if (collapsedDays[day]) return;
 
-    [
-      'Assigning Tkts',
-      'TKT',
-      'System',
-      'Talk Time',
-      'Tele-SCH',
-      'Comp',
-      'Loss Time'
-    ].forEach((label, index) => {
+    DAY_METRIC_LABELS.forEach((label, index) => {
       const th = document.createElement('th');
       th.className = index === 0 ? 'th-sub-orange' : 'th-sub-purple';
       th.textContent = label;
@@ -1129,10 +1166,14 @@ function renderMatrixTable(rows) {
     [
       row.teleoptiId,
       row.loginId,
-      row.agentName,
+      row.perm,
       row.ttsUser,
-      row.tlName,
-      row.status
+      row.bssUser,
+      row.group,
+      row.agentName,
+      row.status,
+      row.tlId,
+      row.tlName
     ].forEach(value => {
       const td = document.createElement('td');
       td.textContent = value ?? '';
@@ -1259,13 +1300,18 @@ function buildExportRows(rows) {
     const result = {
       'Teleopti ID': row.teleoptiId,
       'Login ID': row.loginId,
-      'Agent Name': row.agentName,
+      'Perm': row.perm,
       'TTS User': row.ttsUser,
-      'TL Name': row.tlName,
-      'Status': row.status
+      'BSS User': row.bssUser,
+      'Group': row.group,
+      'Agent Name': row.agentName,
+      'Status': row.status,
+      'TL ID': row.tlId,
+      'TL Name': row.tlName
     };
 
     dateGroups.forEach(day => {
+      if (collapsedDays[day]) return;
       const values = row.days[day] || {};
       const label = displayDate(day);
 
