@@ -55,6 +55,18 @@ const REQUIRED_HEADER_ALIASES = {
   ]
 };
 
+const GROUPED_SCHEDULE_HEADER_ALIASES = [
+  ['Contract time', 'Contract time (hh:mm)', 'Contract time (hh:mm:ss)'],
+  ['Work time', 'Work time (hh:mm)', 'Work time (hh:mm:ss)'],
+  ['Paid time', 'Paid time (hh:mm)', 'Paid time (hh:mm:ss)'],
+  ['Scheduled overtime', 'Scheduled overtime (hh:mm)', 'Scheduled overtime (hh:mm:ss)'],
+  ['Contract absence time', 'Contract absence time (hh:mm)', 'Contract absence time (hh:mm:ss)'],
+  FIELD_ALIASES.scheduleDuration,
+  ['Planned overtime', 'Planned overtime (hh:mm)', 'Planned overtime (hh:mm:ss)']
+];
+
+const GROUPED_SCHEDULE_TOTALS_ALIASES = ['Totals', 'Total', 'الإجمالي', 'إجمالي', 'المجموع'];
+
 ['struct', 'schedule', 'utl', 'ir', 'comp'].forEach(key => {
   const input = document.getElementById(`file-${key}`);
   if (input) {
@@ -153,6 +165,69 @@ function dateKey(value) {
   }
 
   return '';
+}
+
+function monthFirstDateKey(value) {
+  if (value === null || value === undefined || value === '') return '';
+
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return formatLocalDate(value);
+  }
+
+  if (typeof value === 'number' && window.XLSX?.SSF) {
+    const parsed = XLSX.SSF.parse_date_code(value);
+    if (parsed) {
+      return `${parsed.y}-${String(parsed.m).padStart(2, '0')}-${String(parsed.d).padStart(2, '0')}`;
+    }
+  }
+
+  const text = String(value).trim();
+  const match = text.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+  if (!match) {
+    const isoMatch = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    return isoMatch
+      ? formatDateParts(
+        Number(isoMatch[1]),
+        Number(isoMatch[2]),
+        Number(isoMatch[3])
+      )
+      : '';
+  }
+
+  let year = Number(match[3]);
+  if (year < 100) year += 2000;
+  const first = Number(match[1]);
+  const second = Number(match[2]);
+  const month = second > 12 && first <= 12
+    ? first
+    : (first > 12 && second <= 12 ? second : first);
+  const day = second > 12 && first <= 12
+    ? second
+    : (first > 12 && second <= 12 ? first : second);
+
+  return formatDateParts(
+    year,
+    month,
+    day
+  );
+}
+
+function parseGroupedScheduleSeconds(value) {
+  if (value === null || value === undefined || value === '') return 0;
+
+  if (typeof value === 'number') {
+    return parseSeconds(value);
+  }
+
+  const text = String(value).trim();
+  if (!text) return 0;
+
+  const parts = text.split(':').map(Number);
+  if (parts.length === 2) {
+    return (parts[0] || 0) * 3600 + (parts[1] || 0) * 60;
+  }
+
+  return parseSeconds(value);
 }
 
 function displayDate(value) {
@@ -344,8 +419,190 @@ function rowsFromMatrix(matrix, headerRowIndex) {
     });
 }
 
+function detectGroupedScheduleHeader(matrix) {
+  let bestMatch = null;
+
+  matrix.forEach((row, index) => {
+    const scheduledTimeColumnIndex = row.findIndex(cell =>
+      matchesAnyAlias(cell, FIELD_ALIASES.scheduleDuration)
+    );
+
+    if (scheduledTimeColumnIndex === -1) return;
+
+    const score = GROUPED_SCHEDULE_HEADER_ALIASES.filter(aliases =>
+      row.some(cell => matchesAnyAlias(cell, aliases))
+    ).length;
+
+    if (!bestMatch || score > bestMatch.score) {
+      bestMatch = { headerRowIndex: index, scheduledTimeColumnIndex, score };
+    }
+  });
+
+  return bestMatch && bestMatch.score >= 3
+    ? bestMatch
+    : null;
+}
+
+function getGroupedScheduleLabelCell(row, scheduledTimeColumnIndex) {
+  const limit = scheduledTimeColumnIndex > 0 ? scheduledTimeColumnIndex : row.length;
+
+  for (let index = 0; index < limit; index += 1) {
+    const value = row[index];
+    const text = String(value ?? '').trim();
+
+    if (text) {
+      return { value, text, index };
+    }
+  }
+
+  return null;
+}
+
+function extractGroupedScheduleNumberPrefixedAgentName(label) {
+  const match = String(label ?? '')
+    .trim()
+    .match(/^\d+\s+(.+?)(?:\s+\d+)?$/);
+
+  if (!match) return '';
+
+  const agentName = match[1].trim();
+  return /[a-z\u0600-\u06ff]/i.test(agentName)
+    ? agentName
+    : '';
+}
+
+function inferGroupedScheduleAgentName(rows, rowIndex, scheduledTimeColumnIndex, labelCell) {
+  if (!/[a-z\u0600-\u06ff]/i.test(labelCell.text)) return '';
+
+  for (let index = rowIndex + 1; index < rows.length; index += 1) {
+    const nextLabelCell = getGroupedScheduleLabelCell(rows[index], scheduledTimeColumnIndex);
+    if (!nextLabelCell) continue;
+
+    if (matchesAnyAlias(nextLabelCell.text, GROUPED_SCHEDULE_TOTALS_ALIASES)) {
+      return '';
+    }
+
+    if (
+      extractGroupedScheduleNumberPrefixedAgentName(nextLabelCell.text) ||
+      nextLabelCell.index <= labelCell.index
+    ) {
+      return '';
+    }
+
+    if (monthFirstDateKey(nextLabelCell.value)) {
+      return labelCell.text.trim();
+    }
+  }
+
+  return '';
+}
+
+function resolveGroupedScheduleAgentName(rows, rowIndex, scheduledTimeColumnIndex, labelCell) {
+  return extractGroupedScheduleNumberPrefixedAgentName(labelCell.text) ||
+    inferGroupedScheduleAgentName(rows, rowIndex, scheduledTimeColumnIndex, labelCell);
+}
+
+function rowsFromGroupedScheduleMatrix(matrix) {
+  const headerInfo = detectGroupedScheduleHeader(matrix);
+  if (!headerInfo) return null;
+
+  const { headerRowIndex, scheduledTimeColumnIndex } = headerInfo;
+  const dataRows = matrix.slice(headerRowIndex + 1);
+  const rows = [];
+  let currentAgent = '';
+  let pendingDay = null;
+
+  function flushPendingDay() {
+    if (!pendingDay?.agent || !pendingDay.day) {
+      pendingDay = null;
+      return;
+    }
+
+    const durationSeconds = pendingDay.hasDirectValue
+      ? parseGroupedScheduleSeconds(pendingDay.rawDuration)
+      : pendingDay.activityDurationSeconds;
+
+    rows.push({
+      [FIELD_ALIASES.scheduleAgent[0]]: pendingDay.agent,
+      [FIELD_ALIASES.scheduleDate[0]]: pendingDay.day,
+      [FIELD_ALIASES.scheduleDuration[0]]: formatTime(durationSeconds)
+    });
+
+    pendingDay = null;
+  }
+
+  dataRows.forEach((row, rowIndex) => {
+    const labelCell = getGroupedScheduleLabelCell(row, scheduledTimeColumnIndex);
+    if (!labelCell) return;
+
+    const labelText = labelCell.text;
+    const day = monthFirstDateKey(labelCell.value);
+    const agentName = resolveGroupedScheduleAgentName(
+      dataRows,
+      rowIndex,
+      scheduledTimeColumnIndex,
+      labelCell
+    );
+
+    if (
+      pendingDay &&
+      !day &&
+      !agentName &&
+      labelCell.index <= pendingDay.labelIndex
+    ) {
+      flushPendingDay();
+    }
+
+    if (matchesAnyAlias(labelText, GROUPED_SCHEDULE_TOTALS_ALIASES)) {
+      flushPendingDay();
+      currentAgent = '';
+      return;
+    }
+
+    if (agentName) {
+      flushPendingDay();
+      currentAgent = agentName;
+      return;
+    }
+
+    if (day) {
+      flushPendingDay();
+
+      if (!currentAgent) return;
+
+      const rawDuration = row[scheduledTimeColumnIndex] ?? '';
+      pendingDay = {
+        agent: currentAgent,
+        day,
+        labelIndex: labelCell.index,
+        rawDuration,
+        hasDirectValue: String(rawDuration ?? '').trim() !== '',
+        activityDurationSeconds: 0
+      };
+      return;
+    }
+
+    if (!pendingDay || labelCell.index <= pendingDay.labelIndex) {
+      return;
+    }
+
+    const activityDuration = row[scheduledTimeColumnIndex] ?? '';
+    if (String(activityDuration ?? '').trim() === '') return;
+
+    pendingDay.activityDurationSeconds += parseGroupedScheduleSeconds(activityDuration);
+  });
+
+  flushPendingDay();
+  return rows;
+}
+
 function parseSheetRows(sheet, options = {}) {
-  const { requiredHeaderAliases, label = 'الشيت', sheetName = '' } = options;
+  const {
+    requiredHeaderAliases,
+    label = 'الشيت',
+    sheetName = '',
+    allowGroupedScheduleFallback = false
+  } = options;
 
   if (!sheet) return [];
 
@@ -360,6 +617,13 @@ function parseSheetRows(sheet, options = {}) {
   const headerRowIndex = detectHeaderRow(matrix, requiredHeaderAliases);
 
   if (headerRowIndex === -1) {
+    if (allowGroupedScheduleFallback) {
+      // Some WFM exports are grouped reports where Agent/Date are row labels, not flat columns.
+      // In that case we reshape the hierarchy back into the flat rows expected by the rest of the app.
+      const groupedRows = rowsFromGroupedScheduleMatrix(matrix);
+      if (groupedRows) return groupedRows;
+    }
+
     throw new Error(
       `تعذر اكتشاف صف العناوين في ${label}${sheetName ? ` (${sheetName})` : ''}. تأكد من وجود الأعمدة Agent و Date و Scheduled time.`
     );
@@ -567,6 +831,7 @@ async function processData() {
         await readWorkbook(filesState.schedule),
         ['schedule', 'scheduled time', 'scheduled time per agent', 'scheduled'],
         {
+          allowGroupedScheduleFallback: true,
           label: 'ملف Schedule / Scheduled Time per Agent',
           requiredHeaderAliases: REQUIRED_HEADER_ALIASES.schedule
         }

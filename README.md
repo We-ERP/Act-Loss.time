@@ -16,4 +16,6 @@
 
 ## ملاحظات الاستخدام:
 - سيتم استخدام الملف `STR Loss.xlsx` الموجود في جذر المستودع تلقائياً كملف Structure، مع بقاء الرفع اليدوي اختيارياً.
-- يمكن رفع ملف `Schedule / Scheduled Time per Agent` بصيغ `XLSX / XLS / CSV`، ويقوم التطبيق باكتشاف صف العناوين تلقائياً حتى لو سبقته صفوف metadata.
+- يمكن رفع ملف `Schedule / Scheduled Time per Agent` بصيغ `XLSX / XLS / CSV`، ويقوم التطبيق بدعم الصيغتين تلقائياً:
+  - جدول مسطّح (Flat table) يحتوي أعمدة `Agent` و `Date` و `Scheduled time` في نفس صف العناوين.
+  - تقرير مجمّع هرمي (Grouped report) مثل تصدير `Scheduled Time per Agent` القياسي، حيث يكون `Scheduled time` في صف العناوين بينما يظهر اسم الموظف والتاريخ كصفوف متدرجة أسفل التقرير.
