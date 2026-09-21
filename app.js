@@ -438,9 +438,7 @@ function detectGroupedScheduleHeader(matrix) {
     }
   });
 
-  return bestMatch && bestMatch.score >= 3
-    ? bestMatch
-    : null;
+  return bestMatch;
 }
 
 function getGroupedScheduleLabelCell(row, scheduledTimeColumnIndex) {
