@@ -51,6 +51,8 @@ input {
 }
 
 .sidebar {
+  display: flex;
+  flex-direction: column;
   width: 260px;
   flex-shrink: 0;
   padding: 20px;

@@ -664,7 +664,7 @@ async function processData() {
       FIELD_ALIASES.scheduleDate,
       FIELD_ALIASES.scheduleDuration
     );
-    const hasSchedule = scheduleIndex.size > 0;
+    const hasSchedule = scheduleDurationPresenceIndex.size > 0;
 
     processedMatrixData = sourceRows.structure.map(row => {
       const teleoptiId = findValue(row, FIELD_ALIASES.structureId);
