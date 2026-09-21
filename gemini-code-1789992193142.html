@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>نظام معالجة وتقارير الـ Call Center</title>
+  <link rel="stylesheet" href="style.css">
+  <!-- مكتبة SheetJS لمعالجة ملفات الاكسيل من المتصفح -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+</head>
+<body>
+
+  <header class="bar">
+    <div class="brand">
+      <div class="pulse"></div>
+      <h1>نظام معالجة وتحديث الـ Structure - Call Center</h1>
+    </div>
+    <div class="watch">
+      <span class="status-dot"></span> متصل وجاهز
+    </div>
+  </header>
+
+  <main>
+    <section class="section-head">
+      <h2>رفع الملفات الخمسة (UTL, IR, Comp, Schedule, Structure)</h2>
+      <p>ارفع الملفات الأربعة وشيت الهيكل الخامس لتحديثه واستخراج التقرير فوراً</p>
+    </section>
+
+    <!-- منطقة رفع الملفات الخمسة -->
+    <ul class="rail">
+      <li class="stub" id="card-utl">
+        <div class="stub-head"><span class="dot"></span><b>1. UTL File</b></div>
+        <div class="stub-file" id="name-utl">لم يتم اختيار ملف</div>
+        <input type="file" id="file-utl" accept=".xlsx, .xls, .csv" hidden>
+        <button class="link" onclick="document.getElementById('file-utl').click()">اختر الملف</button>
+      </li>
+
+      <li class="stub" id="card-ir">
+        <div class="stub-head"><span class="dot"></span><b>2. IR File</b></div>
+        <div class="stub-file" id="name-ir">لم يتم اختيار ملف</div>
+        <input type="file" id="file-ir" accept=".xlsx, .xls, .csv" hidden>
+        <button class="link" onclick="document.getElementById('file-ir').click()">اختر الملف</button>
+      </li>
+
+      <li class="stub" id="card-comp">
+        <div class="stub-head"><span class="dot"></span><b>3. Compensation File</b></div>
+        <div class="stub-file" id="name-comp">لم يتم اختيار ملف</div>
+        <input type="file" id="file-comp" accept=".xlsx, .xls, .csv" hidden>
+        <button class="link" onclick="document.getElementById('file-comp').click()">اختر الملف</button>
+      </li>
+
+      <li class="stub" id="card-sched">
+        <div class="stub-head"><span class="dot"></span><b>4. Schedule File</b></div>
+        <div class="stub-file" id="name-sched">لم يتم اختيار ملف</div>
+        <input type="file" id="file-sched" accept=".xlsx, .xls, .csv" hidden>
+        <button class="link" onclick="document.getElementById('file-sched').click()">اختر الملف</button>
+      </li>
+
+      <li class="stub" id="card-struct">
+        <div class="stub-head"><span class="dot"></span><b>5. Structure File</b></div>
+        <div class="stub-file" id="name-struct">لم يتم اختيار ملف</div>
+        <input type="file" id="file-struct" accept=".xlsx, .xls, .csv" hidden>
+        <button class="link" onclick="document.getElementById('file-struct').click()">اختر الملف</button>
+      </li>
+
+      <li class="go">
+        <button class="run" id="btnRun" onclick="processAllData()">تشغيل ومعالجة 🚀</button>
+        <div class="progress"><i id="progressBar"></i></div>
+        <div class="go-hint" id="runHint">جاهز لبدء المعالجة</div>
+      </li>
+    </ul>
+
+    <!-- قسم عرض النتائج والتصدير -->
+    <section id="results" style="display:none;">
+      <div class="res-head">
+        <div>
+          <h2>التقرير النهائي المحدث (Final Structure)</h2>
+          <p>تم دمج البيانات وحساب Loss Time وتذاكر الـ IR بنجاح</p>
+        </div>
+        <div class="res-actions">
+          <button class="btn primary" onclick="exportToExcel()">📥 تصدير TKT / Final Excel</button>
+          <button class="btn" onclick="exportToCSV()">📄 تصدير CSV</button>
+        </div>
+      </div>
+
+      <div class="figures">
+        <div><span>إجمالي الموظفين</span><b id="statTotalAgents">0</b></div>
+        <div><span>الموظفين النشطين (Active)</span><b id="statActiveAgents">0</b></div>
+        <div><span>التذاكر المسندة (Assigned)</span><b id="statTickets">0</b></div>
+        <div class="utl"><span>إجمالي Talk Time</span><b id="statTalkTime">00:00:00</b></div>
+        <div class="loss"><span>إجمالي Loss Time</span><b id="statLossTime">00:00:00</b></div>
+      </div>
+
+      <div class="toolbar">
+        <input type="search" id="searchInput" placeholder="بحث باسم الموظف أو Login ID..." oninput="filterTable()">
+        <div class="spacer"></div>
+        <span class="hint">معاينة التقرير قبل التنزيل النهائي</span>
+      </div>
+
+      <div class="tablewrap">
+        <table class="grid" id="mainTable">
+          <thead>
+            <tr id="tableHeader"></tr>
+          </thead>
+          <tbody id="tableBody"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
