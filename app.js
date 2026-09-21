@@ -507,6 +507,8 @@ function rowsFromGroupedScheduleMatrix(matrix) {
     }
 
     if (matchesAnyAlias(labelText, ['Totals'])) {
+      flushPendingDay();
+      currentAgent = '';
       return;
     }
 
