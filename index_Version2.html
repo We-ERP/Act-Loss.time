@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CC Performance Dashboard</title>
+
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet"
+        href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+</head>
+
+<body>
+  <div class="app-layout">
+    <aside class="sidebar">
+      <div class="brand">
+        <i class="fa-solid fa-chart-line logo-icon"></i>
+        <div class="brand-text">
+          <h2>CC Performance</h2>
+          <span>Daily Loss Time Dashboard</span>
+        </div>
+      </div>
+
+      <nav class="nav-menu">
+        <a href="#" class="active">
+          <i class="fa-solid fa-table-cells"></i>
+          التقرير اليومي
+        </a>
+        <a href="#uploadSection">
+          <i class="fa-solid fa-file-arrow-up"></i>
+          رفع الملفات
+        </a>
+        <a href="#matrixTable">
+          <i class="fa-solid fa-users"></i>
+          أداء الموظفين
+        </a>
+        <a href="#settings">
+          <i class="fa-solid fa-gear"></i>
+          الإعدادات
+        </a>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="user-status">
+          <span class="status-badge live"></span>
+          <span>النظام جاهز للمعالجة</span>
+        </div>
+      </div>
+    </aside>
+
+    <main class="main-content">
+      <header class="top-header">
+        <div class="header-title">
+          <h1>Daily Performance Matrix</h1>
+          <p>
+            تقرير يومي شامل لحساب Assigning Tkts و TKT و Talk Time و Loss Time
+          </p>
+        </div>
+
+        <div class="header-actions">
+          <button class="btn btn-outline" onclick="exportToCSV()">
+            <i class="fa-solid fa-file-csv"></i>
+            تصدير CSV
+          </button>
+
+          <button class="btn btn-primary" onclick="exportToExcel()">
+            <i class="fa-solid fa-file-excel"></i>
+            تصدير Excel
+          </button>
+        </div>
+      </header>
+
+      <section class="upload-section" id="uploadSection">
+        <div class="section-title">
+          <i class="fa-solid fa-cloud-arrow-up"></i>
+          <h3>تحميل الشيتات ومعالجة البيانات</h3>
+        </div>
+
+        <div class="upload-grid">
+          <div class="upload-card" id="card-struct">
+            <div class="card-icon">
+              <i class="fa-solid fa-sitemap"></i>
+            </div>
+
+            <div class="card-info">
+              <h4>Structure Master</h4>
+              <span id="name-struct">سيتم استخدام STR Loss.xlsx تلقائيًا</span>
+            </div>
+
+            <input type="file" id="file-struct" accept=".xlsx,.xls,.csv" hidden>
+            <button class="btn-select"
+                    onclick="document.getElementById('file-struct').click()">
+              اختيار
+            </button>
+          </div>
+
+          <div class="upload-card" id="card-utl">
+            <div class="card-icon">
+              <i class="fa-solid fa-phone-volume"></i>
+            </div>
+
+            <div class="card-info">
+              <h4>UTL Logs</h4>
+              <span id="name-utl">Hold + Other + AUX + ACW</span>
+            </div>
+
+            <input type="file" id="file-utl" accept=".xlsx,.xls,.csv" hidden>
+            <button class="btn-select"
+                    onclick="document.getElementById('file-utl').click()">
+              اختيار
+            </button>
+          </div>
+
+          <div class="upload-card" id="card-ir">
+            <div class="card-icon">
+              <i class="fa-solid fa-ticket"></i>
+            </div>
+
+            <div class="card-info">
+              <h4>IR Tickets</h4>
+              <span id="name-ir">User: added_by / Date: added_on</span>
+            </div>
+
+            <input type="file" id="file-ir" accept=".xlsx,.xls,.csv" hidden>
+            <button class="btn-select"
+                    onclick="document.getElementById('file-ir').click()">
+              اختيار
+            </button>
+          </div>
+
+          <div class="upload-card" id="card-comp">
+            <div class="card-icon">
+              <i class="fa-solid fa-clock-rotate-left"></i>
+            </div>
+
+            <div class="card-info">
+              <h4>Compensation</h4>
+              <span id="name-comp">Comp_Du / Comp_ID / Comp_Da</span>
+            </div>
+
+            <input type="file" id="file-comp" accept=".xlsx,.xls,.csv" hidden>
+            <button class="btn-select"
+                    onclick="document.getElementById('file-comp').click()">
+              اختيار
+            </button>
+          </div>
+
+          <div class="action-card">
+            <button class="btn-run" id="btnRun" onclick="processData()">
+              <i class="fa-solid fa-bolt"></i>
+              بدء المعالجة وإنشاء التقرير
+            </button>
+
+            <div class="progress-bar">
+              <div class="progress-fill" id="progressBar"></div>
+            </div>
+
+            <span class="status-text" id="statusText">
+              جاهز للمعالجة
+            </span>
+          </div>
+        </div>
+      </section>
+
+      <section class="table-controls" id="settings">
+        <div class="search-box">
+          <i class="fa-solid fa-magnifying-glass"></i>
+          <input
+            type="search"
+            id="searchInput"
+            placeholder="بحث بالاسم أو Login ID أو TL Name..."
+            oninput="filterData()">
+        </div>
+
+        <div class="group-toggles" id="groupToggles">
+          <span class="control-label">سيتم عرض التواريخ بعد المعالجة</span>
+        </div>
+
+        <div class="view-stats">
+          <span id="rowCount">عدد الموظفين: 0</span>
+        </div>
+      </section>
+
+      <section class="table-wrapper">
+        <div class="table-container">
+          <table class="report-table" id="matrixTable">
+            <thead id="tableHead"></thead>
+
+            <tbody id="tableBody">
+              <tr>
+                <td colspan="15" class="empty-state">
+                  <i class="fa-solid fa-file-excel"></i>
+                  <p>
+                    ارفع UTL و IR و Compensation ثم اضغط بدء المعالجة.
+                    سيتم استخدام STR Loss.xlsx تلقائيًا.
+                  </p>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
