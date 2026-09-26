@@ -73,13 +73,9 @@ const GROUPED_SCHEDULE_TOTALS_ALIASES = ['Totals', 'Total', 'الإجمالي', 
 const BASE_COLUMN_LABELS = [
   'Teleopti ID',
   'Login ID',
-  'Perm',
   'TTS User',
-  'BSS User',
-  'Group',
   'Agent Name',
   'Status',
-  'TL ID',
   'TL Name'
 ];
 const DAY_METRIC_LABELS = [
@@ -818,6 +814,82 @@ function hasPresentCandidate(presenceSet, candidates, day) {
   return candidates.some(candidate => presenceSet.has(makeLookupKey(candidate, day)));
 }
 
+// ─── Positional Schedule Parser ──────────────────────────────────────────────
+// Reads: Column B (idx 1) = Login ID, Column C (idx 2) = date/code, Column J (idx 9) = time
+function buildScheduleIndexByPosition(sheet) {
+  if (!sheet) return { sumMap: new Map(), presenceSet: new Set() };
+
+  const COL_LOGIN = 1;   // Column B
+  const COL_DATE  = 2;   // Column C
+  const COL_TIME  = 9;   // Column J
+
+  const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: false });
+  const sumMap      = new Map();
+  const presenceSet = new Set();
+
+  let currentLogin = '';
+  let pendingDay   = null;
+
+  const flushPending = () => {
+    if (!pendingDay) return;
+    const { login, day, directSecs, hasValue, actSecs } = pendingDay;
+    const secs = hasValue ? directSecs : actSecs;
+    if (login && day && secs > 0) {
+      addToIndex(sumMap, login, day, secs);
+      presenceSet.add(makeLookupKey(login, day));
+    }
+    pendingDay = null;
+  };
+
+  for (const row of matrix) {
+    const colB = String(row[COL_LOGIN] ?? '').trim();
+    const colC = String(row[COL_DATE]  ?? '').trim();
+    const colJ = String(row[COL_TIME]  ?? '').trim();
+
+    // A new agent block starts when column B holds a standalone 5–6-digit login
+    if (colB) {
+      const loginMatch = colB.match(/\b(\d{5,6})\b/);
+      if (loginMatch) {
+        flushPending();
+        currentLogin = loginMatch[1];
+      }
+    }
+
+    if (!currentLogin || !colC) continue;
+
+    const day = dateKey(colC) || monthFirstDateKey(colC);
+    if (day) {
+      flushPending();
+      pendingDay = {
+        login: currentLogin,
+        day,
+        directSecs: colJ ? parseSeconds(colJ) : 0,
+        hasValue:   Boolean(colJ),
+        actSecs:    0
+      };
+    } else if (pendingDay && colJ) {
+      // Activity row under the current date – accumulate
+      pendingDay.actSecs += parseSeconds(colJ);
+    }
+  }
+
+  flushPending();
+  return { sumMap, presenceSet };
+}
+
+// ─── Positional IR Counter ────────────────────────────────────────────────────
+// Counts rows where the value at `userColIndex` matches an agent's login ID.
+function buildIRCountIndexByColumnIndex(rows, userColIndex, dateAliases) {
+  const map = new Map();
+  rows.forEach(row => {
+    const vals = Object.values(row);
+    const user = String(vals[userColIndex] ?? '').trim();
+    const day  = dateKey(findValue(row, dateAliases, ''));
+    if (user && day) addToIndex(map, user, day, 1);
+  });
+  return map;
+}
+
 function getSourceSummary() {
   return [
     `Structure: ${sourceLabels.structure}`,
@@ -880,17 +952,23 @@ async function processData() {
 
     progress.style.width = '18%';
 
+    let _scheduleWorkbook = null;
     if (filesState.schedule) {
       status.textContent = 'جاري قراءة Schedule / Scheduled Time per Agent...';
-      sourceRows.schedule = chooseSheet(
-        await readWorkbook(filesState.schedule),
-        ['schedule', 'scheduled time', 'scheduled time per agent', 'scheduled'],
-        {
-          allowGroupedScheduleFallback: true,
-          label: 'ملف Schedule / Scheduled Time per Agent',
-          requiredHeaderAliases: REQUIRED_HEADER_ALIASES.schedule
-        }
-      );
+      _scheduleWorkbook = await readWorkbook(filesState.schedule);
+      try {
+        sourceRows.schedule = chooseSheet(
+          _scheduleWorkbook,
+          ['schedule', 'scheduled time', 'scheduled time per agent', 'scheduled'],
+          {
+            allowGroupedScheduleFallback: true,
+            label: 'ملف Schedule / Scheduled Time per Agent',
+            requiredHeaderAliases: REQUIRED_HEADER_ALIASES.schedule
+          }
+        );
+      } catch {
+        sourceRows.schedule = [];
+      }
       sourceLabels.schedule = filesState.schedule.name;
     } else {
       sourceRows.schedule = [];
@@ -941,16 +1019,19 @@ async function processData() {
     status.textContent = `جاري بناء الفهارس وتجهيز ${dateGroups.length} تاريخ...`;
     progress.style.width = '75%';
 
-    const irAssigningIndex = buildCountIndex(
-      sourceRows.ir,
-      FIELD_ALIASES.irAssigned,
-      FIELD_ALIASES.irDate
-    );
-    const irTktIndex = buildCountIndex(
-      sourceRows.ir,
-      ['IR_L_E'],
-      FIELD_ALIASES.irDate
-    );
+    // ── IR: try column-position first (X=col 24 → Assigning, Y=col 25 → TKT),
+    //        fall back to header-name matching when column position yields nothing.
+    const IR_COL_X = 23; // Excel column X (0-indexed)
+    const IR_COL_Y = 24; // Excel column Y (0-indexed)
+    const _irByPosX = buildIRCountIndexByColumnIndex(sourceRows.ir, IR_COL_X, FIELD_ALIASES.irDate);
+    const _irByPosY = buildIRCountIndexByColumnIndex(sourceRows.ir, IR_COL_Y, FIELD_ALIASES.irDate);
+    const irAssigningIndex = _irByPosX.size
+      ? _irByPosX
+      : buildCountIndex(sourceRows.ir, FIELD_ALIASES.irAssigned, FIELD_ALIASES.irDate);
+    const irTktIndex = _irByPosY.size
+      ? _irByPosY
+      : buildCountIndex(sourceRows.ir, ['IR_L_E'], FIELD_ALIASES.irDate);
+
     const talkTimeIndex = buildTalkTimeIndex(sourceRows.utl);
     const structureDurationIndex = buildSumIndex(
       sourceRows.structure,
@@ -964,18 +1045,23 @@ async function processData() {
       FIELD_ALIASES.compDate,
       FIELD_ALIASES.compDuration
     );
-    const scheduleIndex = buildSumIndex(
-      sourceRows.schedule,
-      FIELD_ALIASES.scheduleAgent,
-      FIELD_ALIASES.scheduleDate,
-      FIELD_ALIASES.scheduleDuration
-    );
-    const scheduleDurationPresenceIndex = buildDurationPresenceIndex(
-      sourceRows.schedule,
-      FIELD_ALIASES.scheduleAgent,
-      FIELD_ALIASES.scheduleDate,
-      FIELD_ALIASES.scheduleDuration
-    );
+
+    // ── Schedule: try column-position first (B=login, C=date, J=time),
+    //              fall back to header-name matching when no data is found.
+    const _schedSheetName = _scheduleWorkbook
+      ? getOrderedSheetNames(_scheduleWorkbook,
+          ['schedule', 'scheduled time', 'scheduled time per agent', 'scheduled'])[0]
+      : null;
+    const _schedSheet = _schedSheetName ? _scheduleWorkbook.Sheets[_schedSheetName] : null;
+    const { sumMap: _schedByPos, presenceSet: _schedPresenceByPos } =
+      buildScheduleIndexByPosition(_schedSheet);
+
+    const scheduleIndex = _schedByPos.size
+      ? _schedByPos
+      : buildSumIndex(sourceRows.schedule, FIELD_ALIASES.scheduleAgent, FIELD_ALIASES.scheduleDate, FIELD_ALIASES.scheduleDuration);
+    const scheduleDurationPresenceIndex = _schedByPos.size
+      ? _schedPresenceByPos
+      : buildDurationPresenceIndex(sourceRows.schedule, FIELD_ALIASES.scheduleAgent, FIELD_ALIASES.scheduleDate, FIELD_ALIASES.scheduleDuration);
     const hasSchedule = scheduleDurationPresenceIndex.size > 0;
 
     processedMatrixData = sourceRows.structure.map(row => {
@@ -995,7 +1081,7 @@ async function processData() {
       dateGroups.forEach(day => {
         const assigning = getIndexedValue(irAssigningIndex, loginId, day);
         const tkt = getIndexedValue(irTktIndex, loginId, day);
-        const system = tkt * 0.00104166666666667;
+        const system = assigning * 0.00104166666666667;
         const talkTime = getIndexedValue(talkTimeIndex, loginId, day);
 
         const scheduleSeconds = hasSchedule
@@ -1173,13 +1259,9 @@ function renderMatrixTable(rows) {
     [
       row.teleoptiId,
       row.loginId,
-      row.perm,
       row.ttsUser,
-      row.bssUser,
-      row.group,
       row.agentName,
       row.status,
-      row.tlId,
       row.tlName
     ].forEach(value => {
       const td = document.createElement('td');
@@ -1307,13 +1389,9 @@ function buildExportRows(rows) {
     const result = {
       'Teleopti ID': row.teleoptiId,
       'Login ID': row.loginId,
-      'Perm': row.perm,
       'TTS User': row.ttsUser,
-      'BSS User': row.bssUser,
-      'Group': row.group,
       'Agent Name': row.agentName,
       'Status': row.status,
-      'TL ID': row.tlId,
       'TL Name': row.tlName
     };
 
