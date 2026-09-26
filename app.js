@@ -857,16 +857,23 @@ async function processData() {
   try {
     status.textContent = 'جاري تحميل Structure...';
 
+    const structureSheetOptions = {
+      requiredHeaderAliases: [FIELD_ALIASES.agentName],
+      label: 'ملف Structure Master'
+    };
+
     if (!filesState.struct) {
       sourceRows.structure = chooseSheet(
         await readBundledStructure(),
-        ['structure', 'str', 'loss', 'master']
+        ['structure', 'str', 'loss', 'master', 'sep', 'updated'],
+        structureSheetOptions
       );
       sourceLabels.structure = 'STR Loss.xlsx من المستودع';
     } else {
       sourceRows.structure = chooseSheet(
         await readWorkbook(filesState.struct),
-        ['structure', 'str', 'loss', 'master']
+        ['structure', 'str', 'loss', 'master', 'sep', 'updated'],
+        structureSheetOptions
       );
       sourceLabels.structure = filesState.struct.name;
     }
