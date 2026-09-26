@@ -1081,7 +1081,7 @@ async function processData() {
       dateGroups.forEach(day => {
         const assigning = getIndexedValue(irAssigningIndex, loginId, day);
         const tkt = getIndexedValue(irTktIndex, loginId, day);
-        const system = assigning * 0.00104166666666667;
+        const system = tkt * 0.00104166666666667;
         const talkTime = getIndexedValue(talkTimeIndex, loginId, day);
 
         const scheduleSeconds = hasSchedule
@@ -1107,7 +1107,7 @@ async function processData() {
 
         const loss = String(statusValue).trim().toLowerCase() !== 'active'
           ? statusValue
-          : formatTime(Math.max(0, teleSchedule - talkTime - comp));
+          : formatTime(Math.max(0, teleSchedule - (system + talkTime + comp)));
 
         days[day] = {
           assigning,

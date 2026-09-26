@@ -1014,7 +1014,7 @@ async function processData() {
 
         const loss = String(statusValue).trim().toLowerCase() !== 'active'
           ? statusValue
-          : formatTime(Math.max(0, teleSchedule - talkTime - comp));
+          : formatTime(Math.max(0, teleSchedule - (system + talkTime + comp)));
 
         days[day] = {
           assigning,
