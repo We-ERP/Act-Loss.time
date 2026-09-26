@@ -986,8 +986,8 @@ async function processData() {
       const days = {};
 
       dateGroups.forEach(day => {
-        const assigning = getIndexedValue(irAssigningIndex, loginId, day);
-        const tkt = getIndexedValue(irTktIndex, loginId, day);
+        const assigning = getIndexedValue(irAssigningIndex, ttsUser, day);
+        const tkt = getIndexedValue(irTktIndex, ttsUser, day);
         const system = tkt * 0.00104166666666667;
         const talkTime = getIndexedValue(talkTimeIndex, loginId, day);
 
