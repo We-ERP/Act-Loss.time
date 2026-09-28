@@ -159,7 +159,8 @@ function dateKey(value) {
   const text = String(value).trim();
   if (!text) return '';
 
-  const match = text.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+  // استخراج التاريخ في حال وجود وقت ملاصق مثل M/D/YYYY HH:MM:SS AM/PM
+  const match = text.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
   if (match) {
     let year = Number(match[3]);
     if (year < 100) year += 2000;
@@ -171,7 +172,7 @@ function dateKey(value) {
     );
   }
 
-  const isoMatch = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  const isoMatch = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
   if (isoMatch) {
     return formatDateParts(
       Number(isoMatch[1]),
@@ -203,9 +204,9 @@ function monthFirstDateKey(value) {
   }
 
   const text = String(value).trim();
-  const match = text.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+  const match = text.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
   if (!match) {
-    const isoMatch = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    const isoMatch = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
     return isoMatch
       ? formatDateParts(
         Number(isoMatch[1]),
