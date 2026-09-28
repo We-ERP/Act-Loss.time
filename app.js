@@ -36,7 +36,7 @@ const FIELD_ALIASES = {
   status: ['Status'],
   tlId: ['TL ID', 'TL Id'],
   tlName: ['TL Name', 'Team Leader', 'TL'],
-  irUser: ['added_by', 'IR_L_E', 'User', 'Login ID'],
+  irUser: ['added_by', 'IR_L_E', 'User', 'TTS User'],
   irAssigned: ['assigned_to'],
   irDate: ['added_on', 'Date'],
   utlUser: ['UL_lo', 'Login ID', 'Login', 'User'],
