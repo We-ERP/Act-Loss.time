@@ -36,8 +36,8 @@ const FIELD_ALIASES = {
   status: ['Status'],
   tlId: ['TL ID', 'TL Id'],
   tlName: ['TL Name', 'Team Leader', 'TL'],
-  irUser: ['IR_L_E', 'added_by', 'User', 'Login ID', 'TTS User', 'TTS', 'Agent Name'],
-  irAssigned: ['assigned_to', 'assigned to', 'Assignee', 'TTS User', 'TTS', 'User'],
+  irUser: ['IR_L_E', 'added_by', 'User', 'TTS User', 'TTS', 'Agent Name', 'Login ID'],
+  irAssigned: ['assigned_to', 'assigned to', 'Assignee', 'TTS User', 'TTS', 'User', 'Login ID'],
   irDate: ['added_on', 'Date', 'Date/Time'],
   utlUser: ['UL_lo', 'Login ID', 'Login', 'User'],
   utlDate: ['UL_Date', 'Date'],
@@ -745,7 +745,7 @@ function buildCountIndex(rows, userAliases, dateAliases) {
       }
     }
     if (!user) {
-      user = findValue(row, ['User', 'TTS User', 'TTS', 'Login ID', 'Login', 'Agent Name', 'Agent'], '');
+      user = findValue(row, ['TTS User', 'TTS', 'added_by', 'assigned_to', 'User', 'Login ID', 'Login', 'Agent Name', 'Agent'], '');
     }
 
     const rawDate = findValue(row, dateAliases, '');
