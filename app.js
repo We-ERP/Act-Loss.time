@@ -39,7 +39,6 @@ function parseDateAny(val) {
   if (!Number.isNaN(d.getTime())) {
     return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
   }
-  // صيغة زي 9/1/2026
   let m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
   if (m) {
     let yr = Number(m[3]); if (yr < 100) yr += 2000;
@@ -88,13 +87,11 @@ function sheetToJsonRaw(sheet) {
   return XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: false });
 }
 
-// قراءة ذكية تجبر الأعمدة حتى لو لم يتم إيجاد عنوان مطابق حرفياً
-funct ion parseGenericSheet(sheet) {
+function parseGenericSheet(sheet) {
   if (!sheet) return [];
   let matrix = sheetToJsonRaw(sheet);
   if (matrix.length === 0) return [];
   
-  // نفترض الصف الأول هو الهيدر، لو فاضي ندور على أول صف فيه بيانات نصية
   let headerIdx = 0;
   for (let i = 0; i < Math.min(10, matrix.length); i++) {
     if (matrix[i].some(c => String(c).trim() !== '')) {
@@ -104,8 +101,6 @@ funct ion parseGenericSheet(sheet) {
   }
   
   let headers = matrix[headerIdx].map((v, idx) => String(v).trim() || `Col_${idx+1}`);
-  console.log("Detected Headers:", headers); // لتتبع الأعمدة في الـ Console
-
   let rows = [];
   for (let i = headerIdx + 1; i < matrix.length; i++) {
     let r = matrix[i];
@@ -122,37 +117,32 @@ async function processData() {
   const status = document.getElementById('statusText');
 
   try {
-    status.textContent = 'جاري التحميل...';
+    status.textContent = 'جاري التحميل ومعالجة البيانات...';
     
-    // Structure
     let strWb = filesState.struct ? await readWb(filesState.struct) : await getBundledStr();
     sourceRows.structure = parseGenericSheet(strWb.Sheets[strWb.SheetNames[0]]);
-    progress.style.width = '20%';
+    if (progress) progress.style.width = '20%';
 
-    // IR Sheet
     if (filesState.ir) {
       let irWb = await readWb(filesState.ir);
       sourceRows.ir = parseGenericSheet(irWb.Sheets[irWb.SheetNames[0]]);
     } else {
       sourceRows.ir = [];
     }
-    progress.style.width = '40%';
+    if (progress) progress.style.width = '40%';
 
-    // UTL Sheet
     if (filesState.utl) {
       let utlWb = await readWb(filesState.utl);
       sourceRows.utl = parseGenericSheet(utlWb.Sheets[utlWb.SheetNames[0]]);
     } else { sourceRows.utl = []; }
-    progress.style.width = '60%';
+    if (progress) progress.style.width = '60%';
 
-    // Comp Sheet
     if (filesState.comp) {
       let compWb = await readWb(filesState.comp);
       sourceRows.comp = parseGenericSheet(compWb.Sheets[compWb.SheetNames[0]]);
     } else { sourceRows.comp = []; }
-    progress.style.width = '80%';
+    if (progress) progress.style.width = '80%';
 
-    // استخراج التواريخ من شيت Structure أو UTL
     let datesSet = new Set();
     sourceRows.structure.forEach(r => {
       Object.keys(r).forEach(k => {
@@ -162,7 +152,6 @@ async function processData() {
     });
     
     sourceRows.ir.forEach(r => {
-      // البحث عن أي عمود يحتوي على التاريخ (زي added_on)
       Object.keys(r).forEach(k => {
         if (/date|added_on|time/i.test(k)) {
           let dt = parseDateAny(r[k]);
@@ -173,17 +162,14 @@ async function processData() {
 
     dateGroups = [...datesSet].sort();
     if (dateGroups.length === 0) {
-      // تاريخ افتراضي لو ملقاش
       dateGroups = ['2026-09-01'];
     }
 
-    // بناء فهارس IR بالبحث المرن عن أعمدة added_by و assigned_to و added_on
-    let irTktMap = new Map(); // added_by
-    let irAssignMap = new Map(); // assigned_to
+    let irTktMap = new Map();
+    let irAssignMap = new Map();
 
     sourceRows.ir.forEach(r => {
       let addedBy = '', assignedTo = '', dateVal = '';
-      
       Object.keys(r).forEach(k => {
         let lk = k.toLowerCase();
         if (lk.includes('added_by') || lk === 'added by') addedBy = String(r[k]).trim();
@@ -206,9 +192,7 @@ async function processData() {
       }
     });
 
-    // تجهيز الجدول النهائي بناءً على Structure
     processedMatrixData = sourceRows.structure.map(row => {
-      // استخراج الحقول الأساسية بمرونة تامة
       let keys = Object.keys(row);
       let getVal = (aliases) => {
         let foundKey = keys.find(k => aliases.some(a => normalise(k).includes(normalise(a))));
@@ -224,9 +208,7 @@ async function processData() {
 
       let days = {};
       dateGroups.forEach(day => {
-        // مفاتيح البحث للموظف
         let candidates = [ttsUser, loginId, agentName, teleoptiId].filter(Boolean);
-        
         let tktCount = 0;
         let assigningCount = 0;
 
@@ -236,16 +218,12 @@ async function processData() {
           if (irAssignMap.has(k)) assigningCount += irAssignMap.get(k);
         });
 
-        // الحسابات المطلوبة بالحرف
         let systemDecimal = tktCount * 0.00104166666666667;
         let systemSeconds = tktCount * 90;
-
-        // جلب ساعات العمل (Tele-SCH) و Talk Time و Comp لو متوفرة
-        let teleSchSec = 28800; // افتراضي 8 ساعات لو مش موجودة
+        let teleSchSec = 28800;
         let talkSec = 0;
         let compSec = 0;
 
-        // Loss Time = (Tele-SCH * 90%) - (System + Talk Time + Comp)
         let lossSec = (teleSchSec * 0.9) - (systemSeconds + talkSec + compSec);
         if (lossSec < 0) lossSec = 0;
 
@@ -268,16 +246,16 @@ async function processData() {
     });
 
     collapseAllDateGroups();
-    progress.style.width = '100%';
-    status.textContent = 'تم معالجة البيانات بنجاح!';
+    if (progress) progress.style.width = '100%';
+    if (status) status.textContent = 'تم معالجة البيانات بنجاح!';
 
     buildGroupToggles();
     renderMatrixTable(processedMatrixData);
 
   } catch (err) {
     console.error(err);
-    progress.style.width = '0%';
-    status.textContent = 'خطأ في المعالجة';
+    if (progress) progress.style.width = '0%';
+    if (status) status.textContent = 'خطأ في المعالجة';
     alert('حدث خطأ: ' + err.message);
   }
 }
@@ -307,10 +285,11 @@ function buildGroupToggles() {
 function renderMatrixTable(rows) {
   const head = document.getElementById('tableHead');
   const body = document.getElementById('tableBody');
+  const rowCountEl = document.getElementById('rowCount');
   if (!head || !body) return;
   
   visibleMatrixData = [...rows];
-  document.getElementById('rowCount').textContent = `عدد الموظفين: ${rows.length}`;
+  if (rowCountEl) rowCountEl.textContent = `عدد الموظفين: ${rows.length}`;
   head.innerHTML = '';
   body.innerHTML = '';
 
@@ -319,7 +298,6 @@ function renderMatrixTable(rows) {
     return;
   }
 
-  // الهيدر الأول
   let tr1 = document.createElement('tr');
   ['Teleopti ID', 'Login ID', 'TTS User', 'Agent Name', 'Status', 'TL Name'].forEach(lbl => {
     let th = document.createElement('th');
@@ -337,7 +315,6 @@ function renderMatrixTable(rows) {
   });
   head.appendChild(tr1);
 
-  // الهيدر الثاني للأعمدة الفرعية
   let tr2 = document.createElement('tr');
   dateGroups.forEach(day => {
     if (collapsedDays[day]) return;
@@ -349,7 +326,6 @@ function renderMatrixTable(rows) {
   });
   head.appendChild(tr2);
 
-  // الصفوف
   rows.forEach(r => {
     let tr = document.createElement('tr');
     [r.teleoptiId, r.loginId, r.ttsUser, r.agentName, r.status, r.tlName].forEach(val => {
@@ -375,3 +351,30 @@ function renderMatrixTable(rows) {
     body.appendChild(tr);
   });
 }
+
+// تفعيل زر المعالجة والبحث التلقائي لو موجودين
+document.addEventListener('DOMContentLoaded', () => {
+  const processBtn = document.getElementById('processBtn');
+  if (processBtn) {
+    processBtn.addEventListener('click', processData);
+  }
+
+  const searchInput = document.getElementById('searchInput');
+  if (searchInput) {
+    searchInput.addEventListener('input', (e) => {
+      let term = normalise(e.target.value);
+      if (!term) {
+        renderMatrixTable(processedMatrixData);
+        return;
+      }
+      let filtered = processedMatrixData.filter(r => 
+        normalise(r.agentName).includes(term) ||
+        normalise(r.loginId).includes(term) ||
+        normalise(r.ttsUser).includes(term) ||
+        normalise(r.teleoptiId).includes(term) ||
+        normalise(r.tlName).includes(term)
+      );
+      renderMatrixTable(filtered);
+    });
+  }
+});
