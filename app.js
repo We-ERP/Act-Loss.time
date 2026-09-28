@@ -36,7 +36,7 @@ const FIELD_ALIASES = {
   status: ['Status'],
   tlId: ['TL ID', 'TL Id'],
   tlName: ['TL Name', 'Team Leader', 'TL'],
-  irUser: ['IR_L_E', 'added_by', 'User', 'TTS User', 'TTS', 'Agent Name', 'Login ID'],
+  irUser: ['added_by', 'IR_L_E', 'User', 'TTS User', 'TTS', 'Agent Name', 'Login ID'],
   irAssigned: ['assigned_to', 'assigned to', 'Assignee', 'TTS User', 'TTS', 'User', 'Login ID'],
   irDate: ['added_on', 'Date', 'Date/Time'],
   utlUser: ['UL_lo', 'Login ID', 'Login', 'User'],
@@ -142,7 +142,7 @@ function formatLocalDate(date) {
   );
 }
 
-function dateKey(value) {
+function flexibleDateKey(value) {
   if (value === null || value === undefined || value === '') return '';
 
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
@@ -159,78 +159,26 @@ function dateKey(value) {
   const text = String(value).trim();
   if (!text) return '';
 
+  // Try Native JS parsing first (Perfect for "9/1/2026 8:41:42 AM" format)
+  const d = new Date(text);
+  if (!Number.isNaN(d.getTime())) {
+    return formatLocalDate(d);
+  }
+
+  // Fallback for DD/MM/YYYY or DD-MM-YYYY if standard parsing fails
   const match = text.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
   if (match) {
     let year = Number(match[3]);
     if (year < 100) year += 2000;
-
-    return formatDateParts(
-      year,
-      Number(match[2]),
-      Number(match[1])
-    );
+    return formatDateParts(year, Number(match[2]), Number(match[1]));
   }
 
   const isoMatch = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
   if (isoMatch) {
-    return formatDateParts(
-      Number(isoMatch[1]),
-      Number(isoMatch[2]),
-      Number(isoMatch[3])
-    );
-  }
-
-  const direct = new Date(text);
-  if (!Number.isNaN(direct.getTime())) {
-    return formatLocalDate(direct);
+    return formatDateParts(Number(isoMatch[1]), Number(isoMatch[2]), Number(isoMatch[3]));
   }
 
   return '';
-}
-
-function monthFirstDateKey(value) {
-  if (value === null || value === undefined || value === '') return '';
-
-  if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    return formatLocalDate(value);
-  }
-
-  if (typeof value === 'number' && window.XLSX?.SSF) {
-    const parsed = XLSX.SSF.parse_date_code(value);
-    if (parsed) {
-      return `${parsed.y}-${String(parsed.m).padStart(2, '0')}-${String(parsed.d).padStart(2, '0')}`;
-    }
-  }
-
-  const text = String(value).trim();
-  const match = text.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
-  if (!match) {
-    const isoMatch = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
-    return isoMatch
-      ? formatDateParts(
-        Number(isoMatch[1]),
-        Number(isoMatch[2]),
-        Number(isoMatch[3])
-      )
-      : '';
-  }
-
-  let year = Number(match[3]);
-  if (year < 100) year += 2000;
-  const first = Number(match[1]);
-  const second = Number(match[2]);
-  const month = second > 12 && first <= 12
-    ? first
-    : (first > 12 && second <= 12 ? second : first);
-  const day = second > 12 && first <= 12
-    ? second
-    : (first > 12 && second <= 12 ? first : second);
-
-  return formatDateParts(
-    year,
-    month,
-    day
-  );
 }
 
 function parseGroupedScheduleSeconds(value) {
@@ -508,7 +456,7 @@ function inferGroupedScheduleAgentName(rows, rowIndex, scheduledTimeColumnIndex,
       return '';
     }
 
-    if (monthFirstDateKey(nextLabelCell.value)) {
+    if (flexibleDateKey(nextLabelCell.value)) {
       return labelCell.text.trim();
     }
   }
@@ -555,7 +503,7 @@ function rowsFromGroupedScheduleMatrix(matrix) {
     if (!labelCell) return;
 
     const labelText = labelCell.text;
-    const day = monthFirstDateKey(labelCell.value);
+    const day = flexibleDateKey(labelCell.value);
     const agentName = resolveGroupedScheduleAgentName(
       dataRows,
       rowIndex,
@@ -642,7 +590,7 @@ function parseSheetRows(sheet, options = {}) {
     }
 
     throw new Error(
-      `تعذر اكتشاف صف العناوين في ${label}${sheetName ? ` (${sheetName})` : ''}. تأكد من وجود الأعمدة Agent و Date و Scheduled time.`
+      `تعذر اكتشاف صف العناوين في ${label}${sheetName ? ` (${sheetName})` : ''}. تأكد من وجود الأعمدة المطلوبة.`
     );
   }
 
@@ -694,7 +642,7 @@ function getDatesFromRows(rows, aliases) {
 
   rows.forEach(row => {
     const value = findValue(row, aliases, '');
-    const key = dateKey(value);
+    const key = flexibleDateKey(value);
     if (key) dates.add(key);
   });
 
@@ -749,7 +697,7 @@ function buildCountIndex(rows, userAliases, dateAliases) {
     }
 
     const rawDate = findValue(row, dateAliases, '');
-    const day = dateKey(rawDate) || monthFirstDateKey(rawDate);
+    const day = flexibleDateKey(rawDate);
     addToIndex(map, user, day, 1);
   });
 
@@ -762,7 +710,7 @@ function buildSumIndex(rows, userAliases, dateAliases, valueAliases) {
   rows.forEach(row => {
     const user = findValue(row, userAliases, '');
     const rawDate = findValue(row, dateAliases, '');
-    const day = dateKey(rawDate) || monthFirstDateKey(rawDate);
+    const day = flexibleDateKey(rawDate);
     const amount = parseSeconds(findValue(row, valueAliases, 0));
     addToIndex(map, user, day, amount);
   });
@@ -776,7 +724,7 @@ function buildDurationPresenceIndex(rows, userAliases, dateAliases, valueAliases
   rows.forEach(row => {
     const rawValue = findValue(row, valueAliases, '');
     const rawDate = findValue(row, dateAliases, '');
-    const day = dateKey(rawDate) || monthFirstDateKey(rawDate);
+    const day = flexibleDateKey(rawDate);
     const key = makeLookupKey(
       findValue(row, userAliases, ''),
       day
@@ -796,7 +744,7 @@ function buildTalkTimeIndex(rows) {
   rows.forEach(row => {
     const user = findValue(row, FIELD_ALIASES.utlUser, '');
     const rawDate = findValue(row, FIELD_ALIASES.utlDate, '');
-    const day = dateKey(rawDate) || monthFirstDateKey(rawDate);
+    const day = flexibleDateKey(rawDate);
     const total =
       parseSeconds(findValue(row, ['Hold Time', 'HoldTime'], 0)) +
       parseSeconds(findValue(row, ['Other Time', 'OtherTime'], 0)) +
@@ -869,7 +817,7 @@ function buildScheduleIndexByPosition(sheet) {
 
     if (!currentLogin || !colC) continue;
 
-    const day = dateKey(colC) || monthFirstDateKey(colC);
+    const day = flexibleDateKey(colC);
     if (day) {
       flushPending();
       pendingDay = {
@@ -1085,7 +1033,7 @@ async function processData() {
         }
         
         const systemDecimal = tkt * 0.00104166666666667;
-        const systemSeconds = Math.round(systemDecimal * 86400); 
+        const systemSeconds = tkt * 90; // Exactly equivalent in seconds for Loss Time calc
 
         const talkTime = getIndexedValue(talkTimeIndex, loginId, day);
 
@@ -1108,21 +1056,21 @@ async function processData() {
             : getIndexedValue(structureDurationIndex, teleoptiId, day))
           : getIndexedValue(structureDurationIndex, teleoptiId, day);
         
-        const teleSchedule = teleScheduleBase * 0.9;
+        const teleSchedule90 = teleScheduleBase * 0.9;
         const comp = getIndexedValue(compIndex, teleoptiId, day);
 
-        const assigning = teleSchedule === 0 ? 0 : rawAssigning;
+        const assigning = teleScheduleBase === 0 ? 0 : rawAssigning;
 
         const loss = String(statusValue).trim().toLowerCase() !== 'active'
           ? statusValue
-          : formatTime(Math.max(0, teleSchedule - (systemSeconds + talkTime + comp)));
+          : formatTime(Math.max(0, teleSchedule90 - (systemSeconds + talkTime + comp)));
 
         days[day] = {
           assigning,
           tkt,
           system: systemDecimal,
           talkTime: formatTime(talkTime),
-          teleSch: formatTime(teleSchedule),
+          teleSch: formatTime(teleScheduleBase), 
           comp: formatTime(comp),
           lossTime: loss
         };
