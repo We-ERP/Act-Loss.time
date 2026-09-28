@@ -737,7 +737,8 @@ function buildCountIndex(rows, userAliases, dateAliases) {
 
   rows.forEach(row => {
     const user = findValue(row, userAliases, '');
-    const day = dateKey(findValue(row, dateAliases, ''));
+    const rawDate = findValue(row, dateAliases, '');
+    const day = dateKey(rawDate) || monthFirstDateKey(rawDate);
     addToIndex(map, user, day, 1);
   });
 
@@ -749,7 +750,8 @@ function buildSumIndex(rows, userAliases, dateAliases, valueAliases) {
 
   rows.forEach(row => {
     const user = findValue(row, userAliases, '');
-    const day = dateKey(findValue(row, dateAliases, ''));
+    const rawDate = findValue(row, dateAliases, '');
+    const day = dateKey(rawDate) || monthFirstDateKey(rawDate);
     const amount = parseSeconds(findValue(row, valueAliases, 0));
     addToIndex(map, user, day, amount);
   });
@@ -762,9 +764,11 @@ function buildDurationPresenceIndex(rows, userAliases, dateAliases, valueAliases
 
   rows.forEach(row => {
     const rawValue = findValue(row, valueAliases, '');
+    const rawDate = findValue(row, dateAliases, '');
+    const day = dateKey(rawDate) || monthFirstDateKey(rawDate);
     const key = makeLookupKey(
       findValue(row, userAliases, ''),
-      dateKey(findValue(row, dateAliases, ''))
+      day
     );
 
     if (key && String(rawValue ?? '').trim() !== '') {
@@ -780,7 +784,8 @@ function buildTalkTimeIndex(rows) {
 
   rows.forEach(row => {
     const user = findValue(row, FIELD_ALIASES.utlUser, '');
-    const day = dateKey(findValue(row, FIELD_ALIASES.utlDate, ''));
+    const rawDate = findValue(row, FIELD_ALIASES.utlDate, '');
+    const day = dateKey(rawDate) || monthFirstDateKey(rawDate);
     const total =
       parseSeconds(findValue(row, ['Hold Time', 'HoldTime'], 0)) +
       parseSeconds(findValue(row, ['Other Time', 'OtherTime'], 0)) +
@@ -812,13 +817,12 @@ function hasPresentCandidate(presenceSet, candidates, day) {
   return candidates.some(candidate => presenceSet.has(makeLookupKey(candidate, day)));
 }
 
-// ─── Positional Schedule Parser ──────────────────────────────────────────────
 function buildScheduleIndexByPosition(sheet) {
   if (!sheet) return { sumMap: new Map(), presenceSet: new Set() };
 
-  const COL_LOGIN = 1;   // Column B
-  const COL_DATE  = 2;   // Column C
-  const COL_TIME  = 9;   // Column J
+  const COL_LOGIN = 1;
+  const COL_DATE  = 2;
+  const COL_TIME  = 9;
 
   const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: false });
   const sumMap      = new Map();
@@ -992,7 +996,6 @@ async function processData() {
     }
 
     rawStructureData = sourceRows.structure;
-
     dateGroups = getPreferredDateGroups();
 
     if (!dateGroups.length) {
@@ -1002,7 +1005,6 @@ async function processData() {
     status.textContent = `جاري بناء الفهارس وتجهيز ${dateGroups.length} تاريخ...`;
     progress.style.width = '75%';
 
-    // قراءة IR بناءً على أسماء الأعمدة الفعلية وليس مواقعها لضمان الدقة
     const irAssigningIndex = buildCountIndex(sourceRows.ir, FIELD_ALIASES.irAssigned, FIELD_ALIASES.irDate);
     const irTktIndex = buildCountIndex(sourceRows.ir, FIELD_ALIASES.irUser, FIELD_ALIASES.irDate);
 
@@ -1054,9 +1056,7 @@ async function processData() {
         const rawAssigning = getIndexedValue(irAssigningIndex, ttsUser, day);
         const tkt = getIndexedValue(irTktIndex, ttsUser, day);
         
-        // حساب الـ System كما في الإكسيل
         const systemDecimal = tkt * 0.00104166666666667;
-        // تحويل System إلى ثواني ليتم طرحه من الوقت الكلي للـ Loss Time
         const systemSeconds = Math.round(systemDecimal * 86400); 
 
         const talkTime = getIndexedValue(talkTimeIndex, loginId, day);
@@ -1083,7 +1083,6 @@ async function processData() {
         const teleSchedule = teleScheduleBase * 0.9;
         const comp = getIndexedValue(compIndex, teleoptiId, day);
 
-        // تطبيق شرط الإكسيل: إذا كان الكولمن K5 الخاص بـ Tele-SCH يساوي صفر، نضع Assigning Tkts بـ صفر
         const assigning = teleSchedule === 0 ? 0 : rawAssigning;
 
         const loss = String(statusValue).trim().toLowerCase() !== 'active'
@@ -1281,7 +1280,6 @@ function renderMatrixTable(rows) {
       ].forEach((value, index) => {
         const td = document.createElement('td');
         
-        // تنسيق الأرقام الطويلة للـ System لعدم تشويه مظهر الجدول، سيتم عرضها حتى 5 أرقام عشرية
         if (index === 2 && typeof value === 'number') {
           td.textContent = Number.isInteger(value) ? value : Number(value.toFixed(5));
         } else {
@@ -1390,7 +1388,6 @@ function buildExportRows(rows) {
 
       result[`${label} - Assigning Tkts`] = values.assigning;
       result[`${label} - TKT`] = values.tkt;
-      // تصدير الرقم العشري الكامل إلى الإكسيل ليتوافق مع معادلاتك الأصلية
       result[`${label} - System`] = values.system; 
       result[`${label} - Talk Time`] = values.talkTime;
       result[`${label} - Tele-SCH`] = values.teleSch;
