@@ -4,9 +4,89 @@ let visibleMatrixData = [];
 let dateGroups = [];
 let collapsedDays = {};
 
-const sourceRows = { structure: [], schedule: [], utl: [], ir: [], comp: [] };
-const filesState = { struct: null, schedule: null, utl: null, ir: null, comp: null };
-const sourceLabels = { structure: 'STR Loss.xlsx', schedule: 'لم يتم رفع Schedule' };
+const sourceRows = {
+  structure: [],
+  schedule: [],
+  utl: [],
+  ir: [],
+  comp: []
+};
+
+const filesState = {
+  struct: null,
+  schedule: null,
+  utl: null,
+  ir: null,
+  comp: null
+};
+
+const sourceLabels = {
+  structure: 'STR Loss.xlsx من المستودع',
+  schedule: 'لم يتم رفع Schedule - سيتم الاعتماد على Structure'
+};
+
+const FIELD_ALIASES = {
+  structureId: ['Teleopti ID', 'Teleopti', 'ST_ID'],
+  loginId: ['Login ID', 'Login', 'UL_lo', 'User', 'Username'],
+  perm: ['Perm'],
+  ttsUser: ['TTS User', 'TTS'],
+  bssUser: ['BSS User', 'BSS'],
+  group: ['Group'],
+  agentName: ['Agent Name', 'Agent', 'Name'],
+  status: ['Status'],
+  tlId: ['TL ID', 'TL Id'],
+  tlName: ['TL Name', 'Team Leader', 'TL'],
+  irUser: ['added_by', 'IR_L_E', 'User', 'Login ID'],
+  irAssigned: ['assigned_to'],
+  irDate: ['added_on', 'Date'],
+  utlUser: ['UL_lo', 'Login ID', 'Login', 'User'],
+  utlDate: ['UL_Date', 'Date'],
+  compId: ['Comp_ID', 'Comp ID', 'Teleopti ID', 'ST_ID'],
+  compDate: ['Comp_Da', 'Date'],
+  compDuration: ['Comp_Du', 'Comp Duration', 'Duration'],
+  structureDate: ['ST_D', 'Date'],
+  structureDuration: ['ST_Du', 'ST Duration', 'Duration'],
+  scheduleAgent: ['Agent', 'Agent Name', 'Employee', 'Employee Name'],
+  scheduleDate: ['Date', 'Scheduled Date'],
+  scheduleDuration: ['Scheduled time', 'Scheduled Time', 'Scheduled time (hh:mm:ss)', 'Scheduled Time (hh:mm:ss)', 'Scheduled-Time', 'Scheduled_Time']
+};
+
+const REQUIRED_HEADER_ALIASES = {
+  schedule: [
+    FIELD_ALIASES.scheduleAgent,
+    FIELD_ALIASES.scheduleDate,
+    FIELD_ALIASES.scheduleDuration
+  ]
+};
+
+const GROUPED_SCHEDULE_HEADER_ALIASES = [
+  ['Contract time', 'Contract time (hh:mm)', 'Contract time (hh:mm:ss)'],
+  ['Work time', 'Work time (hh:mm)', 'Work time (hh:mm:ss)'],
+  ['Paid time', 'Paid time (hh:mm)', 'Paid time (hh:mm:ss)'],
+  ['Scheduled overtime', 'Scheduled overtime (hh:mm)', 'Scheduled overtime (hh:mm:ss)'],
+  ['Contract absence time', 'Contract absence time (hh:mm)', 'Contract absence time (hh:mm:ss)'],
+  FIELD_ALIASES.scheduleDuration,
+  ['Planned overtime', 'Planned overtime (hh:mm)', 'Planned overtime (hh:mm:ss)']
+];
+
+const GROUPED_SCHEDULE_TOTALS_ALIASES = ['Totals', 'Total', 'الإجمالي', 'إجمالي', 'المجموع'];
+const BASE_COLUMN_LABELS = [
+  'Teleopti ID',
+  'Login ID',
+  'TTS User',
+  'Agent Name',
+  'Status',
+  'TL Name'
+];
+const DAY_METRIC_LABELS = [
+  'Assigning Tkts',
+  'TKT',
+  'System',
+  'Talk Time',
+  'Tele-SCH',
+  'Comp',
+  'Loss Time'
+];
 
 ['struct', 'schedule', 'utl', 'ir', 'comp'].forEach(key => {
   const input = document.getElementById(`file-${key}`);
@@ -14,102 +94,788 @@ const sourceLabels = { structure: 'STR Loss.xlsx', schedule: 'لم يتم رفع
     input.addEventListener('change', event => {
       const file = event.target.files[0];
       if (!file) return;
+
       filesState[key] = file;
+
       const name = document.getElementById(`name-${key}`);
       const card = document.getElementById(`card-${key}`);
+
       if (name) name.textContent = file.name;
       if (card) card.dataset.ready = 'true';
     });
   }
 });
 
-function normalise(v) { return String(v ?? '').trim().toLowerCase().replace(/[^a-z0-9\u0600-\u06ff]+/gi, ''); }
+function normalise(value) {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\u0600-\u06ff]+/gi, '');
+}
 
-function parseDateAny(val) {
-  if (!val) return '';
-  if (val instanceof Date && !Number.isNaN(val.getTime())) {
-    return `${val.getFullYear()}-${String(val.getMonth()+1).padStart(2,'0')}-${String(val.getDate()).padStart(2,'0')}`;
+function matchesNormalisedValue(left, right) {
+  if (!left || !right) return false;
+  return left === right || left.includes(right) || right.includes(left);
+}
+
+function matchesAnyAlias(value, aliases) {
+  const current = normalise(value);
+  return aliases.some(alias => matchesNormalisedValue(current, normalise(alias)));
+}
+
+function findValue(row, aliases, fallback = '') {
+  if (!row) return fallback;
+
+  const key = Object.keys(row).find(name => matchesAnyAlias(name, aliases));
+  return key === undefined ? fallback : row[key];
+}
+
+function formatDateParts(year, month, day) {
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+function formatLocalDate(date) {
+  return formatDateParts(
+    date.getFullYear(),
+    date.getMonth() + 1,
+    date.getDate()
+  );
+}
+
+function dateKey(value) {
+  if (value === null || value === undefined || value === '') return '';
+
+  if (typeof value === 'number') {
+    if (window.XLSX?.SSF) {
+      const parsed = XLSX.SSF.parse_date_code(value);
+      if (parsed && parsed.y > 2000 && parsed.y < 2100) {
+        return `${parsed.y}-${String(parsed.m).padStart(2, '0')}-${String(parsed.d).padStart(2, '0')}`;
+      }
+    }
+    let utc_days = Math.floor(value - 25569);
+    let utc_value = utc_days * 86400;
+    let date_info = new Date(utc_value * 1000);
+    if (!isNaN(date_info.getTime()) && date_info.getFullYear() > 2000 && date_info.getFullYear() < 2100) {
+      return `${date_info.getUTCFullYear()}-${String(date_info.getUTCMonth()+1).padStart(2,'0')}-${String(date_info.getUTCDate()).padStart(2,'0')}`;
+    }
   }
-  if (typeof val === 'number' && window.XLSX?.SSF) {
-    const p = XLSX.SSF.parse_date_code(val);
-    if (p) return `${p.y}-${String(p.m).padStart(2,'0')}-${String(p.d).padStart(2,'0')}`;
+
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return formatLocalDate(value);
   }
-  let s = String(val).trim();
-  const d = new Date(s);
-  if (!Number.isNaN(d.getTime())) {
-    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+
+  const text = String(value).trim();
+  if (!text) return '';
+
+  const match = text.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+  if (match) {
+    let year = Number(match[3]);
+    if (year < 100) year += 2000;
+    if (year > 2000 && year < 2100) {
+      return formatDateParts(year, Number(match[2]), Number(match[1]));
+    }
   }
-  let m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
-  if (m) {
-    let yr = Number(m[3]); if (yr < 100) yr += 2000;
-    return `${yr}-${String(m[2]).padStart(2,'0')}-${String(m[1]).padStart(2,'0')}`;
+
+  const isoMatch = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (isoMatch) {
+    let year = Number(isoMatch[1]);
+    if (year > 2000 && year < 2100) {
+      return formatDateParts(year, Number(isoMatch[2]), Number(isoMatch[3]));
+    }
   }
+
+  const direct = new Date(text);
+  if (!Number.isNaN(direct.getTime()) && direct.getFullYear() > 2000 && direct.getFullYear() < 2100) {
+    return formatLocalDate(direct);
+  }
+
   return '';
 }
 
-function parseSec(val) {
-  if (val === null || val === undefined || val === '') return 0;
-  if (typeof val === 'number') return val > 0 && val < 1 ? val * 86400 : val;
-  let s = String(val).trim();
-  let parts = s.split(':').map(Number);
-  if (parts.length === 3) return (parts[0]||0)*3600 + (parts[1]||0)*60 + (parts[2]||0);
-  if (parts.length === 2) return (parts[0]||0)*60 + (parts[1]||0);
-  return Number(s) || 0;
+function monthFirstDateKey(value) {
+  return dateKey(value);
 }
 
-function formatTime(sec) {
-  if (!Number.isFinite(sec) || sec <= 0) return '0:00:00';
-  let h = Math.floor(sec / 3600);
-  let m = Math.floor((sec % 3600) / 60);
-  let s = Math.floor(sec % 60);
-  return `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+function parseGroupedScheduleSeconds(value) {
+  if (value === null || value === undefined || value === '') return 0;
+
+  if (typeof value === 'number') {
+    return parseSeconds(value);
+  }
+
+  const text = String(value).trim();
+  if (!text) return 0;
+
+  const parts = text.split(':').map(Number);
+  if (parts.length === 2) {
+    return (parts[0] || 0) * 3600 + (parts[1] || 0) * 60;
+  }
+
+  return parseSeconds(value);
 }
 
-function readWb(file) {
-  return new Promise((res, rej) => {
-    let r = new FileReader();
-    r.onload = e => {
-      try { res(XLSX.read(new Uint8Array(e.target.result), { type: 'array', cellDates: true, raw: false })); }
-      catch(err) { rej(err); }
+function displayDate(value) {
+  if (!value) return '';
+
+  const date = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return value;
+
+  return date.toLocaleDateString('en-GB', {
+    day: '2-digit',
+    month: 'short'
+  }).replace(' ', '-');
+}
+
+function parseSeconds(value) {
+  if (value === null || value === undefined || value === '') return 0;
+
+  if (typeof value === 'number') {
+    return value > 0 && value < 1 ? value * 86400 : value;
+  }
+
+  const text = String(value).trim();
+  const lower = text.toLowerCase();
+
+  if (
+    !text ||
+    lower === 'unpaid' ||
+    lower === 'maternity' ||
+    lower === 'planned sick'
+  ) {
+    return 0;
+  }
+
+  const parts = text.split(':').map(Number);
+
+  if (parts.length === 3) {
+    return (parts[0] || 0) * 3600 +
+      (parts[1] || 0) * 60 +
+      (parts[2] || 0);
+  }
+
+  if (parts.length === 2) {
+    return (parts[0] || 0) * 60 + (parts[1] || 0);
+  }
+
+  return Number(text) || 0;
+}
+
+function formatTime(seconds) {
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return '0:00:00';
+  }
+
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remaining = Math.floor(seconds % 60);
+
+  return `${hours}:${String(minutes).padStart(2, '0')}:${String(remaining).padStart(2, '0')}`;
+}
+
+function readWorkbook(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = event => {
+      try {
+        resolve(
+          XLSX.read(
+            new Uint8Array(event.target.result),
+            {
+              type: 'array',
+              cellDates: true,
+              raw: false
+            }
+          )
+        );
+      } catch (error) {
+        reject(error);
+      }
     };
-    r.onerror = rej;
-    r.readAsArrayBuffer(file);
+
+    reader.onerror = reject;
+    reader.readAsArrayBuffer(file);
   });
 }
 
-async function getBundledStr() {
-  let res = await fetch(encodeURI('STR Loss.xlsx'), { cache: 'no-store' });
-  let buf = await res.arrayBuffer();
-  return XLSX.read(new Uint8Array(buf), { type: 'array', cellDates: true, raw: false });
+async function readBundledStructure() {
+  let response;
+
+  try {
+    response = await fetch(
+      encodeURI('STR Loss.xlsx'),
+      { cache: 'no-store' }
+    );
+  } catch (error) {
+    throw new Error(
+      'تعذر تحميل STR Loss.xlsx تلقائياً. إذا كنت تفتح الصفحة مباشرة من الملفات المحلية فشغّلها عبر localhost أو ارفع Structure يدوياً.'
+    );
+  }
+
+  if (!response.ok) {
+    throw new Error('لم يتم العثور على STR Loss.xlsx داخل جذر المستودع');
+  }
+
+  const buffer = await response.arrayBuffer();
+  return XLSX.read(
+    new Uint8Array(buffer),
+    {
+      type: 'array',
+      cellDates: true,
+      raw: false
+    }
+  );
 }
 
-function sheetToJsonRaw(sheet) {
-  return XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: false });
+function getOrderedSheetNames(workbook, words) {
+  const sheetNames = workbook?.SheetNames || [];
+  const preferred = [];
+  const fallback = [];
+
+  sheetNames.forEach(name => {
+    if (words.some(word => matchesAnyAlias(name, [word]))) {
+      preferred.push(name);
+    } else {
+      fallback.push(name);
+    }
+  });
+
+  return [...preferred, ...fallback];
 }
 
-function parseGenericSheet(sheet) {
-  if (!sheet) return [];
-  let matrix = sheetToJsonRaw(sheet);
-  if (matrix.length === 0) return [];
-  
-  let headerIdx = 0;
-  for (let i = 0; i < Math.min(10, matrix.length); i++) {
-    if (matrix[i].some(c => String(c).trim() !== '')) {
-      headerIdx = i;
-      break;
+function matrixFromSheet(sheet) {
+  return XLSX.utils.sheet_to_json(sheet, {
+    header: 1,
+    defval: '',
+    raw: false,
+    blankrows: false
+  });
+}
+
+function detectHeaderRow(matrix, aliasGroups) {
+  let bestIndex = -1;
+  let bestScore = 0;
+
+  matrix.forEach((row, index) => {
+    const cells = row
+      .map(cell => normalise(cell))
+      .filter(Boolean);
+
+    if (!cells.length) return;
+
+    const score = aliasGroups.filter(aliases =>
+      aliases.some(alias => {
+        const expected = normalise(alias);
+        return cells.some(cell => matchesNormalisedValue(cell, expected));
+      })
+    ).length;
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestIndex = index;
+    }
+  });
+
+  return bestScore === aliasGroups.length
+    ? bestIndex
+    : -1;
+}
+
+function rowsFromMatrix(matrix, headerRowIndex) {
+  const rawHeaders = matrix[headerRowIndex] || [];
+  const headerCounts = new Map();
+  const headers = rawHeaders.map((value, index) => {
+    const base = String(value ?? '').trim() || `Column ${index + 1}`;
+    const seen = headerCounts.get(base) || 0;
+    headerCounts.set(base, seen + 1);
+    return seen ? `${base} ${seen + 1}` : base;
+  });
+
+  return matrix
+    .slice(headerRowIndex + 1)
+    .filter(row => row.some(value => String(value ?? '').trim() !== ''))
+    .map(row => {
+      const record = {};
+      headers.forEach((header, index) => {
+        record[header] = row[index] ?? '';
+      });
+      return record;
+    });
+}
+
+function detectGroupedScheduleHeader(matrix) {
+  let bestMatch = null;
+
+  matrix.forEach((row, index) => {
+    const scheduledTimeColumnIndex = row.findIndex(cell =>
+      matchesAnyAlias(cell, FIELD_ALIASES.scheduleDuration)
+    );
+
+    if (scheduledTimeColumnIndex === -1) return;
+
+    const score = GROUPED_SCHEDULE_HEADER_ALIASES.filter(aliases =>
+      row.some(cell => matchesAnyAlias(cell, aliases))
+    ).length;
+
+    if (!bestMatch || score > bestMatch.score) {
+      bestMatch = { headerRowIndex: index, scheduledTimeColumnIndex, score };
+    }
+  });
+
+  return bestMatch;
+}
+
+function getGroupedScheduleLabelCell(row, scheduledTimeColumnIndex) {
+  const limit = scheduledTimeColumnIndex > 0 ? scheduledTimeColumnIndex : row.length;
+
+  for (let index = 0; index < limit; index += 1) {
+    const value = row[index];
+    const text = String(value ?? '').trim();
+
+    if (text) {
+      return { value, text, index };
     }
   }
-  
-  let headers = matrix[headerIdx].map((v, idx) => String(v).trim() || `Col_${idx+1}`);
-  let rows = [];
-  for (let i = headerIdx + 1; i < matrix.length; i++) {
-    let r = matrix[i];
-    if (!r.some(cell => String(cell).trim() !== '')) continue;
-    let obj = {};
-    headers.forEach((h, idx) => { obj[h] = r[idx] ?? ''; });
-    rows.push(obj);
+
+  return null;
+}
+
+function extractGroupedScheduleNumberPrefixedAgentName(label) {
+  const match = String(label ?? '')
+    .trim()
+    .match(/^\d+\s+(.+?)(?:\s+\d+)?$/);
+
+  if (!match) return '';
+
+  const agentName = match[1].trim();
+  return /[a-z\u0600-\u06ff]/i.test(agentName)
+    ? agentName
+    : '';
+}
+
+function inferGroupedScheduleAgentName(rows, rowIndex, scheduledTimeColumnIndex, labelCell) {
+  if (!/[a-z\u0600-\u06ff]/i.test(labelCell.text)) return '';
+
+  for (let index = rowIndex + 1; index < rows.length; index += 1) {
+    const nextLabelCell = getGroupedScheduleLabelCell(rows[index], scheduledTimeColumnIndex);
+    if (!nextLabelCell) continue;
+
+    if (matchesAnyAlias(nextLabelCell.text, GROUPED_SCHEDULE_TOTALS_ALIASES)) {
+      return '';
+    }
+
+    if (
+      extractGroupedScheduleNumberPrefixedAgentName(nextLabelCell.text) ||
+      nextLabelCell.index <= labelCell.index
+    ) {
+      return '';
+    }
+
+    if (monthFirstDateKey(nextLabelCell.value)) {
+      return labelCell.text.trim();
+    }
   }
+
+  return '';
+}
+
+function resolveGroupedScheduleAgentName(rows, rowIndex, scheduledTimeColumnIndex, labelCell) {
+  return extractGroupedScheduleNumberPrefixedAgentName(labelCell.text) ||
+    inferGroupedScheduleAgentName(rows, rowIndex, scheduledTimeColumnIndex, labelCell);
+}
+
+function rowsFromGroupedScheduleMatrix(matrix) {
+  const headerInfo = detectGroupedScheduleHeader(matrix);
+  if (!headerInfo) return null;
+
+  const { headerRowIndex, scheduledTimeColumnIndex } = headerInfo;
+  const dataRows = matrix.slice(headerRowIndex + 1);
+  const rows = [];
+  let currentAgent = '';
+  let pendingDay = null;
+
+  function flushPendingDay() {
+    if (!pendingDay?.agent || !pendingDay.day) {
+      pendingDay = null;
+      return;
+    }
+
+    const durationSeconds = pendingDay.hasDirectValue
+      ? parseGroupedScheduleSeconds(pendingDay.rawDuration)
+      : pendingDay.activityDurationSeconds;
+
+    rows.push({
+      [FIELD_ALIASES.scheduleAgent[0]]: pendingDay.agent,
+      [FIELD_ALIASES.scheduleDate[0]]: pendingDay.day,
+      [FIELD_ALIASES.scheduleDuration[0]]: formatTime(durationSeconds)
+    });
+
+    pendingDay = null;
+  }
+
+  dataRows.forEach((row, rowIndex) => {
+    const labelCell = getGroupedScheduleLabelCell(row, scheduledTimeColumnIndex);
+    if (!labelCell) return;
+
+    const labelText = labelCell.text;
+    const day = monthFirstDateKey(labelCell.value);
+    const agentName = resolveGroupedScheduleAgentName(
+      dataRows,
+      rowIndex,
+      scheduledTimeColumnIndex,
+      labelCell
+    );
+
+    if (
+      pendingDay &&
+      !day &&
+      !agentName &&
+      labelCell.index <= pendingDay.labelIndex
+    ) {
+      flushPendingDay();
+    }
+
+    if (matchesAnyAlias(labelText, GROUPED_SCHEDULE_TOTALS_ALIASES)) {
+      flushPendingDay();
+      currentAgent = '';
+      return;
+    }
+
+    if (agentName) {
+      flushPendingDay();
+      currentAgent = agentName;
+      return;
+    }
+
+    if (day) {
+      flushPendingDay();
+
+      if (!currentAgent) return;
+
+      const rawDuration = row[scheduledTimeColumnIndex] ?? '';
+      pendingDay = {
+        agent: currentAgent,
+        day,
+        labelIndex: labelCell.index,
+        rawDuration,
+        hasDirectValue: String(rawDuration ?? '').trim() !== '',
+        activityDurationSeconds: 0
+      };
+      return;
+    }
+
+    if (!pendingDay || labelCell.index <= pendingDay.labelIndex) {
+      return;
+    }
+
+    const activityDuration = row[scheduledTimeColumnIndex] ?? '';
+    if (String(activityDuration ?? '').trim() === '') return;
+
+    pendingDay.activityDurationSeconds += parseGroupedScheduleSeconds(activityDuration);
+  });
+
+  flushPendingDay();
   return rows;
+}
+
+function parseSheetRows(sheet, options = {}) {
+  const {
+    requiredHeaderAliases,
+    label = 'الشيت',
+    sheetName = '',
+    allowGroupedScheduleFallback = false
+  } = options;
+
+  if (!sheet) return [];
+
+  if (!requiredHeaderAliases) {
+    return XLSX.utils.sheet_to_json(sheet, {
+      defval: '',
+      raw: false
+    });
+  }
+
+  const matrix = matrixFromSheet(sheet);
+  const headerRowIndex = detectHeaderRow(matrix, requiredHeaderAliases);
+
+  if (headerRowIndex === -1) {
+    if (allowGroupedScheduleFallback) {
+      const groupedRows = rowsFromGroupedScheduleMatrix(matrix);
+      if (groupedRows) return groupedRows;
+    }
+
+    throw new Error(
+      `تعذر اكتشاف صف العناوين في ${label}${sheetName ? ` (${sheetName})` : ''}. تأكد من وجود الأعمدة Agent و Date و Scheduled time.`
+    );
+  }
+
+  const rows = rowsFromMatrix(matrix, headerRowIndex);
+  const headerNames = (matrix[headerRowIndex] || [])
+    .map(value => String(value ?? '').trim())
+    .filter(Boolean);
+  const missingColumns = requiredHeaderAliases
+    .filter(aliases => !headerNames.some(header => matchesAnyAlias(header, aliases)))
+    .map(aliases => aliases[0]);
+
+  if (missingColumns.length) {
+    throw new Error(
+      `تعذر العثور على الأعمدة المطلوبة في ${label}${sheetName ? ` (${sheetName})` : ''}: ${missingColumns.join(', ')}`
+    );
+  }
+
+  return rows;
+}
+
+function chooseSheet(workbook, words, options = {}) {
+  const orderedNames = getOrderedSheetNames(workbook, words);
+  let lastError = null;
+
+  for (const name of orderedNames) {
+    try {
+      const rows = parseSheetRows(workbook.Sheets[name], {
+        ...options,
+        sheetName: name
+      });
+
+      if (rows.length || !options.requiredHeaderAliases) {
+        return rows;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  if (lastError) {
+    throw lastError;
+  }
+
+  return [];
+}
+
+function getDatesFromRows(rows, aliases) {
+  const dates = new Set();
+
+  rows.forEach(row => {
+    const value = findValue(row, aliases, '');
+    const key = dateKey(value);
+    if (key && key.length === 10 && key.startsWith('202')) dates.add(key);
+  });
+
+  return dates;
+}
+
+function getStructureDates(rows) {
+  const dates = getDatesFromRows(rows, FIELD_ALIASES.structureDate);
+  const fallbackYear = [...dates][0]?.slice(0, 4) || String(new Date().getFullYear());
+
+  rows.forEach(row => {
+    Object.keys(row).forEach(key => {
+      const match = key.match(/^(\d{1,2})[-\/](Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)$/i);
+
+      if (match) {
+        const parsed = new Date(`${match[1]} ${match[2]} ${fallbackYear}`);
+        if (!Number.isNaN(parsed.getTime())) {
+          const formatted = formatLocalDate(parsed);
+          if (formatted.startsWith('202')) dates.add(formatted);
+        }
+      }
+    });
+  });
+
+  return dates;
+}
+
+function makeLookupKey(value, day) {
+  const normalised = normalise(value);
+  return normalised && day ? `${normalised}|${day}` : '';
+}
+
+function addToIndex(map, value, day, amount) {
+  const key = makeLookupKey(value, day);
+  if (!key) return;
+  map.set(key, (map.get(key) || 0) + amount);
+}
+
+function buildCountIndex(rows, userAliases, dateAliases) {
+  const map = new Map();
+
+  rows.forEach(row => {
+    const user = findValue(row, userAliases, '');
+    const day = dateKey(findValue(row, dateAliases, ''));
+    addToIndex(map, user, day, 1);
+  });
+
+  return map;
+}
+
+function buildSumIndex(rows, userAliases, dateAliases, valueAliases) {
+  const map = new Map();
+
+  rows.forEach(row => {
+    const user = findValue(row, userAliases, '');
+    const day = dateKey(findValue(row, dateAliases, ''));
+    const amount = parseSeconds(findValue(row, valueAliases, 0));
+    addToIndex(map, user, day, amount);
+  });
+
+  return map;
+}
+
+function buildDurationPresenceIndex(rows, userAliases, dateAliases, valueAliases) {
+  const set = new Set();
+
+  rows.forEach(row => {
+    const rawValue = findValue(row, valueAliases, '');
+    const key = makeLookupKey(
+      findValue(row, userAliases, ''),
+      dateKey(findValue(row, dateAliases, ''))
+    );
+
+    if (key && String(rawValue ?? '').trim() !== '') {
+      set.add(key);
+    }
+  });
+
+  return set;
+}
+
+function buildTalkTimeIndex(rows) {
+  const map = new Map();
+
+  rows.forEach(row => {
+    const user = findValue(row, FIELD_ALIASES.utlUser, '');
+    const day = dateKey(findValue(row, FIELD_ALIASES.utlDate, ''));
+    const total =
+      parseSeconds(findValue(row, ['Hold Time', 'HoldTime'], 0)) +
+      parseSeconds(findValue(row, ['Other Time', 'OtherTime'], 0)) +
+      parseSeconds(findValue(row, ['AUXOUTOFFTIME'], 0)) +
+      parseSeconds(findValue(row, ['ACWOUTOFFTIME'], 0));
+
+    addToIndex(map, user, day, total);
+  });
+
+  return map;
+}
+
+function getIndexedValue(map, value, day) {
+  return map.get(makeLookupKey(value, day)) || 0;
+}
+
+function getPresentIndexedValueByCandidates(map, presenceSet, candidates, day) {
+  for (const candidate of candidates) {
+    const key = makeLookupKey(candidate, day);
+    if (presenceSet.has(key)) {
+      return map.get(key) || 0;
+    }
+  }
+
+  return 0;
+}
+
+function hasPresentCandidate(presenceSet, candidates, day) {
+  return candidates.some(candidate => presenceSet.has(makeLookupKey(candidate, day)));
+}
+
+function buildScheduleIndexByPosition(sheet) {
+  if (!sheet) return { sumMap: new Map(), presenceSet: new Set() };
+
+  const COL_LOGIN = 1;
+  const COL_DATE  = 2;
+  const COL_TIME  = 9;
+
+  const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: false });
+  const sumMap      = new Map();
+  const presenceSet = new Set();
+
+  let currentLogin = '';
+  let pendingDay   = null;
+
+  const flushPending = () => {
+    if (!pendingDay) return;
+    const { login, day, directSecs, hasValue, actSecs } = pendingDay;
+    const secs = hasValue ? directSecs : actSecs;
+    if (login && day && secs > 0) {
+      addToIndex(sumMap, login, day, secs);
+      presenceSet.add(makeLookupKey(login, day));
+    }
+    pendingDay = null;
+  };
+
+  for (const row of matrix) {
+    const colB = String(row[COL_LOGIN] ?? '').trim();
+    const colC = String(row[COL_DATE]  ?? '').trim();
+    const colJ = String(row[COL_TIME]  ?? '').trim();
+
+    if (colB) {
+      const loginMatches = colB.match(/\b\d{5,6}\b/g);
+      if (loginMatches && loginMatches.length) {
+        flushPending();
+        currentLogin = loginMatches[loginMatches.length - 1];
+      }
+    }
+
+    if (!currentLogin || !colC) continue;
+
+    const day = dateKey(colC);
+    if (day) {
+      flushPending();
+      pendingDay = {
+        login: currentLogin,
+        day,
+        directSecs: colJ ? parseSeconds(colJ) : 0,
+        hasValue:   Boolean(colJ),
+        actSecs:    0
+      };
+    } else if (pendingDay && colJ) {
+      pendingDay.actSecs += parseSeconds(colJ);
+    }
+  }
+
+  flushPending();
+  return { sumMap, presenceSet };
+}
+
+function buildIRCountIndexByColumnIndex(rows, userColIndex, dateAliases) {
+  const map = new Map();
+  rows.forEach(row => {
+    const vals = Object.values(row);
+    const user = String(vals[userColIndex] ?? '').trim();
+    const day  = dateKey(findValue(row, dateAliases, ''));
+    if (user && day) addToIndex(map, user, day, 1);
+  });
+  return map;
+}
+
+function getSourceSummary() {
+  return [
+    `Structure: ${sourceLabels.structure}`,
+    `Schedule: ${sourceLabels.schedule}`
+  ].join(' | ');
+}
+
+function getVisibleDayColumnCount() {
+  return dateGroups.reduce(
+    (total, day) => total + (collapsedDays[day] ? 1 : DAY_METRIC_LABELS.length),
+    0
+  );
+}
+
+function getEmptyStateColspan() {
+  return BASE_COLUMN_LABELS.length + getVisibleDayColumnCount();
+}
+
+function getPreferredDateGroups() {
+  const utlDates = [...getDatesFromRows(sourceRows.utl, FIELD_ALIASES.utlDate)].sort();
+  if (utlDates.length) return utlDates;
+
+  return [...getStructureDates(sourceRows.structure)].sort();
+}
+
+function collapseAllDateGroups() {
+  collapsedDays = {};
+  dateGroups.forEach(day => {
+    collapsedDays[day] = true;
+  });
 }
 
 async function processData() {
@@ -117,264 +883,486 @@ async function processData() {
   const status = document.getElementById('statusText');
 
   try {
-    status.textContent = 'جاري التحميل ومعالجة البيانات...';
-    
-    let strWb = filesState.struct ? await readWb(filesState.struct) : await getBundledStr();
-    sourceRows.structure = parseGenericSheet(strWb.Sheets[strWb.SheetNames[0]]);
-    if (progress) progress.style.width = '20%';
+    status.textContent = 'جاري تحميل Structure...';
+
+    const structureSheetOptions = {
+      requiredHeaderAliases: [FIELD_ALIASES.agentName],
+      label: 'ملف Structure Master'
+    };
+
+    if (!filesState.struct) {
+      sourceRows.structure = chooseSheet(
+        await readBundledStructure(),
+        ['structure', 'str', 'loss', 'master', 'sep', 'updated'],
+        structureSheetOptions
+      );
+      sourceLabels.structure = 'STR Loss.xlsx من المستودع';
+    } else {
+      sourceRows.structure = chooseSheet(
+        await readWorkbook(filesState.struct),
+        ['structure', 'str', 'loss', 'master', 'sep', 'updated'],
+        structureSheetOptions
+      );
+      sourceLabels.structure = filesState.struct.name;
+    }
+
+    progress.style.width = '18%';
+
+    let _scheduleWorkbook = null;
+    if (filesState.schedule) {
+      status.textContent = 'جاري قراءة Schedule / Scheduled Time per Agent...';
+      _scheduleWorkbook = await readWorkbook(filesState.schedule);
+      try {
+        sourceRows.schedule = chooseSheet(
+          _scheduleWorkbook,
+          ['schedule', 'scheduled time', 'scheduled time per agent', 'scheduled'],
+          {
+            allowGroupedScheduleFallback: true,
+            label: 'ملف Schedule / Scheduled Time per Agent',
+            requiredHeaderAliases: REQUIRED_HEADER_ALIASES.schedule
+          }
+        );
+      } catch {
+        sourceRows.schedule = [];
+      }
+      sourceLabels.schedule = filesState.schedule.name;
+    } else {
+      sourceRows.schedule = [];
+      sourceLabels.schedule = 'لم يتم رفع Schedule - سيتم الاعتماد على Structure';
+    }
+
+    progress.style.width = '34%';
+
+    if (filesState.utl) {
+      sourceRows.utl = chooseSheet(
+        await readWorkbook(filesState.utl),
+        ['utl', 'log']
+      );
+    } else {
+      sourceRows.utl = [];
+    }
+
+    progress.style.width = '48%';
 
     if (filesState.ir) {
-      let irWb = await readWb(filesState.ir);
-      sourceRows.ir = parseGenericSheet(irWb.Sheets[irWb.SheetNames[0]]);
+      sourceRows.ir = chooseSheet(
+        await readWorkbook(filesState.ir),
+        ['ir', 'ticket']
+      );
     } else {
       sourceRows.ir = [];
     }
-    if (progress) progress.style.width = '40%';
 
-    if (filesState.utl) {
-      let utlWb = await readWb(filesState.utl);
-      sourceRows.utl = parseGenericSheet(utlWb.Sheets[utlWb.SheetNames[0]]);
-    } else { sourceRows.utl = []; }
-    if (progress) progress.style.width = '60%';
+    progress.style.width = '62%';
 
     if (filesState.comp) {
-      let compWb = await readWb(filesState.comp);
-      sourceRows.comp = parseGenericSheet(compWb.Sheets[compWb.SheetNames[0]]);
-    } else { sourceRows.comp = []; }
-    if (progress) progress.style.width = '80%';
-
-    let datesSet = new Set();
-    sourceRows.structure.forEach(r => {
-      Object.keys(r).forEach(k => {
-        let dt = parseDateAny(r[k]);
-        if (dt && dt.length === 10) datesSet.add(dt);
-      });
-    });
-    
-    sourceRows.ir.forEach(r => {
-      Object.keys(r).forEach(k => {
-        if (/date|added_on|time/i.test(k)) {
-          let dt = parseDateAny(r[k]);
-          if (dt) datesSet.add(dt);
-        }
-      });
-    });
-
-    dateGroups = [...datesSet].sort();
-    if (dateGroups.length === 0) {
-      dateGroups = ['2026-09-01'];
+      sourceRows.comp = chooseSheet(
+        await readWorkbook(filesState.comp),
+        ['comp', 'compensation']
+      );
+    } else {
+      sourceRows.comp = [];
     }
 
-    let irTktMap = new Map();
-    let irAssignMap = new Map();
+    rawStructureData = sourceRows.structure;
 
-    sourceRows.ir.forEach(r => {
-      let addedBy = '', assignedTo = '', dateVal = '';
-      Object.keys(r).forEach(k => {
-        let lk = k.toLowerCase();
-        if (lk.includes('added_by') || lk === 'added by') addedBy = String(r[k]).trim();
-        if (lk.includes('assigned_to') || lk === 'assigned to') assignedTo = String(r[k]).trim();
-        if (lk.includes('added_on') || lk === 'added on' || lk.includes('date')) {
-          let parsed = parseDateAny(r[k]);
-          if (parsed) dateVal = parsed;
-        }
-      });
+    dateGroups = getPreferredDateGroups();
 
-      if (dateVal) {
-        if (addedBy) {
-          let k1 = `${normalise(addedBy)}|${dateVal}`;
-          irTktMap.set(k1, (irTktMap.get(k1) || 0) + 1);
-        }
-        if (assignedTo) {
-          let k2 = `${normalise(assignedTo)}|${dateVal}`;
-          irAssignMap.set(k2, (irAssignMap.get(k2) || 0) + 1);
-        }
-      }
-    });
+    if (!dateGroups.length) {
+      throw new Error('لم يتم العثور على أي تاريخ داخل الشيتات');
+    }
+
+    status.textContent = `جاري بناء الفهارس وتجهيز ${dateGroups.length} تاريخ...`;
+    progress.style.width = '75%';
+
+    const IR_COL_X = 23;
+    const IR_COL_Y = 24;
+    const _irByPosX = buildIRCountIndexByColumnIndex(sourceRows.ir, IR_COL_X, FIELD_ALIASES.irDate);
+    const _irByPosY = buildIRCountIndexByColumnIndex(sourceRows.ir, IR_COL_Y, FIELD_ALIASES.irDate);
+    const irAssigningIndex = _irByPosX.size
+      ? _irByPosX
+      : buildCountIndex(sourceRows.ir, FIELD_ALIASES.irAssigned, FIELD_ALIASES.irDate);
+    const irTktIndex = _irByPosY.size
+      ? _irByPosY
+      : buildCountIndex(sourceRows.ir, ['IR_L_E'], FIELD_ALIASES.irDate);
+
+    const talkTimeIndex = buildTalkTimeIndex(sourceRows.utl);
+    const structureDurationIndex = buildSumIndex(
+      sourceRows.structure,
+      FIELD_ALIASES.structureId,
+      FIELD_ALIASES.structureDate,
+      FIELD_ALIASES.structureDuration
+    );
+    const compIndex = buildSumIndex(
+      sourceRows.comp,
+      FIELD_ALIASES.compId,
+      FIELD_ALIASES.compDate,
+      FIELD_ALIASES.compDuration
+    );
+
+    const _schedSheetName = _scheduleWorkbook
+      ? getOrderedSheetNames(_scheduleWorkbook,
+          ['schedule', 'scheduled time', 'scheduled time per agent', 'scheduled'])[0]
+      : null;
+    const _schedSheet = _schedSheetName ? _scheduleWorkbook.Sheets[_schedSheetName] : null;
+    const { sumMap: _schedByPos, presenceSet: _schedPresenceByPos } =
+      buildScheduleIndexByPosition(_schedSheet);
+
+    const scheduleIndex = _schedByPos.size
+      ? _schedByPos
+      : buildSumIndex(sourceRows.schedule, FIELD_ALIASES.scheduleAgent, FIELD_ALIASES.scheduleDate, FIELD_ALIASES.scheduleDuration);
+    const scheduleDurationPresenceIndex = _schedByPos.size
+      ? _schedPresenceByPos
+      : buildDurationPresenceIndex(sourceRows.schedule, FIELD_ALIASES.scheduleAgent, FIELD_ALIASES.scheduleDate, FIELD_ALIASES.scheduleDuration);
+    const hasSchedule = scheduleDurationPresenceIndex.size > 0;
 
     processedMatrixData = sourceRows.structure.map(row => {
-      let keys = Object.keys(row);
-      let getVal = (aliases) => {
-        let foundKey = keys.find(k => aliases.some(a => normalise(k).includes(normalise(a))));
-        return foundKey !== undefined ? row[foundKey] : '';
-      };
+      const teleoptiId = findValue(row, FIELD_ALIASES.structureId);
+      const loginId = findValue(row, FIELD_ALIASES.loginId);
+      const perm = findValue(row, FIELD_ALIASES.perm);
+      const ttsUser = findValue(row, FIELD_ALIASES.ttsUser);
+      const bssUser = findValue(row, FIELD_ALIASES.bssUser);
+      const group = findValue(row, FIELD_ALIASES.group);
+      const agentName = findValue(row, FIELD_ALIASES.agentName);
+      const statusValue = findValue(row, FIELD_ALIASES.status, 'Active');
+      const tlId = findValue(row, FIELD_ALIASES.tlId);
+      const tlName = findValue(row, FIELD_ALIASES.tlName);
+      const scheduleCandidates = [agentName, loginId, ttsUser, teleoptiId];
+      const days = {};
 
-      let teleoptiId = getVal(['Teleopti ID', 'Teleopti', 'ST_ID', 'ID']);
-      let loginId = getVal(['Login ID', 'Login', 'UL_lo', 'User']);
-      let ttsUser = getVal(['TTS User', 'TTS']);
-      let agentName = getVal(['Agent Name', 'Agent', 'Name']);
-      let statusValue = getVal(['Status']) || 'Active';
-      let tlName = getVal(['TL Name', 'Team Leader', 'TL']);
-
-      let days = {};
       dateGroups.forEach(day => {
-        let candidates = [ttsUser, loginId, agentName, teleoptiId].filter(Boolean);
-        let tktCount = 0;
-        let assigningCount = 0;
+        const assigning = getIndexedValue(irAssigningIndex, ttsUser, day);
+        const tkt = getIndexedValue(irTktIndex, ttsUser, day);
+        const system = tkt * 0.00104166666666667;
+        const talkTime = getIndexedValue(talkTimeIndex, loginId, day);
 
-        candidates.forEach(c => {
-          let k = `${normalise(c)}|${day}`;
-          if (irTktMap.has(k)) tktCount += irTktMap.get(k);
-          if (irAssignMap.has(k)) assigningCount += irAssignMap.get(k);
-        });
+        const scheduleSeconds = hasSchedule
+          ? getPresentIndexedValueByCandidates(
+            scheduleIndex,
+            scheduleDurationPresenceIndex,
+            scheduleCandidates,
+            day
+          )
+          : 0;
+        const hasScheduleDuration = hasSchedule && hasPresentCandidate(
+          scheduleDurationPresenceIndex,
+          scheduleCandidates,
+          day
+        );
+        const teleScheduleBase = hasSchedule
+          ? (hasScheduleDuration
+            ? scheduleSeconds
+            : getIndexedValue(structureDurationIndex, teleoptiId, day))
+          : getIndexedValue(structureDurationIndex, teleoptiId, day);
+        const teleSchedule = teleScheduleBase * 0.9;
+        const comp = getIndexedValue(compIndex, teleoptiId, day);
 
-        let systemDecimal = tktCount * 0.00104166666666667;
-        let systemSeconds = tktCount * 90;
-        let teleSchSec = 28800;
-        let talkSec = 0;
-        let compSec = 0;
-
-        let lossSec = (teleSchSec * 0.9) - (systemSeconds + talkSec + compSec);
-        if (lossSec < 0) lossSec = 0;
-
-        let lossTimeStr = String(statusValue).trim().toLowerCase() !== 'active' 
-          ? statusValue 
-          : formatTime(lossSec);
+        const loss = String(statusValue).trim().toLowerCase() !== 'active'
+          ? statusValue
+          : formatTime(Math.max(0, teleSchedule - (system + talkTime + comp)));
 
         days[day] = {
-          assigning: assigningCount,
-          tkt: tktCount,
-          system: systemDecimal,
-          talkTime: formatTime(talkSec),
-          teleSch: formatTime(teleSchSec),
-          comp: formatTime(compSec),
-          lossTime: lossTimeStr
+          assigning,
+          tkt,
+          system,
+          talkTime: formatTime(talkTime),
+          teleSch: formatTime(teleSchedule),
+          comp: formatTime(comp),
+          lossTime: loss
         };
       });
 
-      return { teleoptiId, loginId, ttsUser, agentName, status: statusValue, tlName, days };
+      return {
+        teleoptiId,
+        loginId,
+        perm,
+        ttsUser,
+        bssUser,
+        group,
+        agentName,
+        status: statusValue,
+        tlId,
+        tlName,
+        days
+      };
     });
 
     collapseAllDateGroups();
-    if (progress) progress.style.width = '100%';
-    if (status) status.textContent = 'تم معالجة البيانات بنجاح!';
+
+    progress.style.width = '100%';
+    status.textContent = `تم تحديث التقرير بنجاح • ${getSourceSummary()}`;
 
     buildGroupToggles();
     renderMatrixTable(processedMatrixData);
-
-  } catch (err) {
-    console.error(err);
-    if (progress) progress.style.width = '0%';
-    if (status) status.textContent = 'خطأ في المعالجة';
-    alert('حدث خطأ: ' + err.message);
+  } catch (error) {
+    console.error(error);
+    progress.style.width = '0%';
+    status.textContent = 'حدث خطأ أثناء المعالجة';
+    alert(error.message);
   }
-}
-
-function collapseAllDateGroups() {
-  collapsedDays = {};
-  dateGroups.forEach(d => { collapsedDays[d] = true; });
 }
 
 function buildGroupToggles() {
   const container = document.getElementById('groupToggles');
-  if (!container) return;
   container.innerHTML = '<span class="control-label">عرض/طي الأيام:</span>';
+
   dateGroups.forEach(day => {
-    let btn = document.createElement('button');
-    btn.className = `day-btn${collapsedDays[day] ? ' collapsed' : ''}`;
-    btn.textContent = day;
-    btn.onclick = () => {
+    const button = document.createElement('button');
+
+    button.className = `day-btn${collapsedDays[day] ? ' collapsed' : ''}`;
+    button.textContent = displayDate(day);
+
+    button.onclick = () => {
       collapsedDays[day] = !collapsedDays[day];
       buildGroupToggles();
       renderMatrixTable(processedMatrixData);
     };
-    container.appendChild(btn);
+
+    container.appendChild(button);
   });
 }
 
 function renderMatrixTable(rows) {
   const head = document.getElementById('tableHead');
   const body = document.getElementById('tableBody');
-  const rowCountEl = document.getElementById('rowCount');
-  if (!head || !body) return;
-  
   visibleMatrixData = [...rows];
-  if (rowCountEl) rowCountEl.textContent = `عدد الموظفين: ${rows.length}`;
+
+  document.getElementById('rowCount').textContent =
+    `عدد الموظفين: ${rows.length}`;
+
   head.innerHTML = '';
   body.innerHTML = '';
 
-  if (rows.length === 0) {
-    body.innerHTML = '<tr><td colspan="10" style="text-align:center; padding:20px;">لا توجد بيانات للعرض</td></tr>';
+  if (!rows.length) {
+    body.innerHTML = `
+      <tr>
+        <td colspan="${getEmptyStateColspan()}" class="empty-state">
+          لا توجد بيانات للعرض
+        </td>
+      </tr>
+    `;
     return;
   }
 
-  let tr1 = document.createElement('tr');
-  ['Teleopti ID', 'Login ID', 'TTS User', 'Agent Name', 'Status', 'TL Name'].forEach(lbl => {
-    let th = document.createElement('th');
-    th.rowSpan = 2; th.textContent = lbl;
-    tr1.appendChild(th);
+  const firstHeader = document.createElement('tr');
+
+  BASE_COLUMN_LABELS.forEach(label => {
+    const th = document.createElement('th');
+    th.rowSpan = 2;
+    th.className = 'th-base';
+    th.textContent = label;
+    firstHeader.appendChild(th);
   });
 
   dateGroups.forEach(day => {
-    let isCol = collapsedDays[day];
-    let th = document.createElement('th');
-    th.colSpan = isCol ? 1 : 7;
-    th.rowSpan = isCol ? 2 : 1;
-    th.textContent = day;
-    tr1.appendChild(th);
-  });
-  head.appendChild(tr1);
+    const isCollapsed = Boolean(collapsedDays[day]);
+    const th = document.createElement('th');
+    th.colSpan = isCollapsed ? 1 : 7;
+    th.rowSpan = isCollapsed ? 2 : 1;
+    th.className = 'th-date-group';
 
-  let tr2 = document.createElement('tr');
+    const content = document.createElement('span');
+    content.className = 'th-date-content';
+
+    const dateText = document.createElement('span');
+    dateText.textContent = displayDate(day);
+
+    const toggleButton = document.createElement('button');
+    toggleButton.type = 'button';
+    toggleButton.className = 'th-day-toggle';
+    toggleButton.setAttribute(
+      'aria-label',
+      isCollapsed ? `توسيع يوم ${displayDate(day)}` : `طي يوم ${displayDate(day)}`
+    );
+    toggleButton.innerHTML = `<i class="fa-solid ${isCollapsed ? 'fa-chevron-left' : 'fa-chevron-down'}"></i>`;
+    toggleButton.onclick = event => {
+      event.stopPropagation();
+      collapsedDays[day] = !collapsedDays[day];
+      buildGroupToggles();
+      renderMatrixTable(processedMatrixData);
+    };
+
+    content.appendChild(dateText);
+    content.appendChild(toggleButton);
+    th.appendChild(content);
+    firstHeader.appendChild(th);
+  });
+
+  head.appendChild(firstHeader);
+
+  const secondHeader = document.createElement('tr');
+
   dateGroups.forEach(day => {
     if (collapsedDays[day]) return;
-    ['Assigning Tkts', 'TKT', 'System', 'Talk Time', 'Tele-SCH', 'Comp', 'Loss Time'].forEach(m => {
-      let th = document.createElement('th');
-      th.textContent = m;
-      tr2.appendChild(th);
+
+    DAY_METRIC_LABELS.forEach((label, index) => {
+      const th = document.createElement('th');
+      th.className = index === 0 ? 'th-sub-orange' : 'th-sub-purple';
+      th.textContent = label;
+      secondHeader.appendChild(th);
     });
   });
-  head.appendChild(tr2);
 
-  rows.forEach(r => {
-    let tr = document.createElement('tr');
-    [r.teleoptiId, r.loginId, r.ttsUser, r.agentName, r.status, r.tlName].forEach(val => {
-      let td = document.createElement('td');
-      td.textContent = val ?? '';
+  head.appendChild(secondHeader);
+
+  rows.forEach(row => {
+    const tr = document.createElement('tr');
+
+    [
+      row.teleoptiId,
+      row.loginId,
+      row.ttsUser,
+      row.agentName,
+      row.status,
+      row.tlName
+    ].forEach(value => {
+      const td = document.createElement('td');
+      td.textContent = value ?? '';
       tr.appendChild(td);
     });
 
     dateGroups.forEach(day => {
       if (collapsedDays[day]) {
-        let td = document.createElement('td');
+        const td = document.createElement('td');
+        td.className = 'day-collapsed-cell';
         td.textContent = '—';
         tr.appendChild(td);
         return;
       }
-      let d = r.days[day] || {};
-      [d.assigning, d.tkt, d.system, d.talkTime, d.teleSch, d.comp, d.lossTime].forEach((v, idx) => {
-        let td = document.createElement('td');
-        td.textContent = (idx === 2 && typeof v === 'number') ? v.toFixed(5) : v;
+
+      const values = row.days[day] || {};
+      const lossText = String(values.lossTime ?? '');
+      const isStatus = ['Unpaid', 'Maternity', 'Planned sick']
+        .includes(lossText);
+
+      const lossClass = isStatus
+        ? 'cell-unpaid'
+        : lossText === '0:00:00'
+          ? 'cell-zero-loss'
+          : 'cell-loss';
+
+      [
+        values.assigning ?? 0,
+        values.tkt ?? 0,
+        values.system ?? 0,
+        values.talkTime ?? '0:00:00',
+        values.teleSch ?? '0:00:00',
+        values.comp ?? '0:00:00',
+        values.lossTime ?? '0:00:00'
+      ].forEach((value, index) => {
+        const td = document.createElement('td');
+        td.textContent = value;
+        td.classList.add('day-metric-cell');
+
+        if (index === 6) {
+          td.classList.add(lossClass);
+        }
+
         tr.appendChild(td);
       });
     });
+
     body.appendChild(tr);
   });
 }
 
-// تفعيل زر المعالجة والبحث التلقائي لو موجودين
-document.addEventListener('DOMContentLoaded', () => {
-  const processBtn = document.getElementById('processBtn');
-  if (processBtn) {
-    processBtn.addEventListener('click', processData);
+function filterData() {
+  const query = document
+    .getElementById('searchInput')
+    .value
+    .trim()
+    .toLowerCase();
+
+  if (!query) {
+    renderMatrixTable(processedMatrixData);
+    return;
   }
 
-  const searchInput = document.getElementById('searchInput');
-  if (searchInput) {
-    searchInput.addEventListener('input', (e) => {
-      let term = normalise(e.target.value);
-      if (!term) {
-        renderMatrixTable(processedMatrixData);
-        return;
-      }
-      let filtered = processedMatrixData.filter(r => 
-        normalise(r.agentName).includes(term) ||
-        normalise(r.loginId).includes(term) ||
-        normalise(r.ttsUser).includes(term) ||
-        normalise(r.teleoptiId).includes(term) ||
-        normalise(r.tlName).includes(term)
-      );
-      renderMatrixTable(filtered);
-    });
+  const filtered = processedMatrixData.filter(row =>
+    [
+      row.agentName,
+      row.loginId,
+      row.teleoptiId,
+      row.ttsUser,
+      row.tlName
+    ].some(value =>
+      String(value ?? '').toLowerCase().includes(query)
+    )
+  );
+
+  renderMatrixTable(filtered);
+}
+
+function exportToExcel() {
+  const exportRows = buildExportRows(visibleMatrixData.length ? visibleMatrixData : processedMatrixData);
+
+  if (!exportRows.length) {
+    alert('لا توجد بيانات للتصدير');
+    return;
   }
-});
+
+  const workbook = XLSX.utils.book_new();
+  const worksheet = XLSX.utils.json_to_sheet(exportRows);
+
+  XLSX.utils.book_append_sheet(
+    workbook,
+    worksheet,
+    'Matrix_Report'
+  );
+
+  XLSX.writeFile(
+    workbook,
+    'CallCenter_Daily_Performance_Report.xlsx'
+  );
+}
+
+function exportToCSV() {
+  const exportRows = buildExportRows(visibleMatrixData.length ? visibleMatrixData : processedMatrixData);
+
+  if (!exportRows.length) {
+    alert('لا توجد بيانات للتصدير');
+    return;
+  }
+
+  const worksheet = XLSX.utils.json_to_sheet(exportRows);
+  const csv = XLSX.utils.sheet_to_csv(worksheet);
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+
+  link.href = url;
+  link.download = 'CallCenter_Daily_Performance_Report.csv';
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function buildExportRows(rows) {
+  return rows.map(row => {
+    const result = {
+      'Teleopti ID': row.teleoptiId,
+      'Login ID': row.loginId,
+      'TTS User': row.ttsUser,
+      'Agent Name': row.agentName,
+      'Status': row.status,
+      'TL Name': row.tlName
+    };
+
+    dateGroups.dateGroups?.forEach(day => { }); // Safety placeholder
+
+    dateGroups.forEach(day => {
+      if (collapsedDays[day]) return;
+      const values = row.days[day] || {};
+      const label = displayDate(day);
+
+      result[`${label} - Assigning Tkts`] = values.assigning;
+      result[`${label} - TKT`] = values.tkt;
+      result[`${label} - System`] = values.system;
+      result[`${label} - Talk Time`] = values.talkTime;
+      result[`${label} - Tele-SCH`] = values.teleSch;
+      result[`${label} - Comp`] = values.comp;
+      result[`${label} - Loss Time`] = values.lossTime;
+    });
+
+    return result;
+  });
+}
