@@ -36,7 +36,7 @@ const FIELD_ALIASES = {
   status: ['Status'],
   tlId: ['TL ID', 'TL Id'],
   tlName: ['TL Name', 'Team Leader', 'TL'],
-  irUser: ['added_by', 'IR_L_E', 'User', 'TTS User'],
+  irUser: ['added_by', 'IR_L_E', 'User', 'Login ID'],
   irAssigned: ['assigned_to'],
   irDate: ['added_on', 'Date'],
   utlUser: ['UL_lo', 'Login ID', 'Login', 'User'],
@@ -145,23 +145,15 @@ function formatLocalDate(date) {
 function dateKey(value) {
   if (value === null || value === undefined || value === '') return '';
 
-  if (typeof value === 'number') {
-    if (window.XLSX?.SSF) {
-      const parsed = XLSX.SSF.parse_date_code(value);
-      if (parsed && parsed.y > 2000 && parsed.y < 2100) {
-        return `${parsed.y}-${String(parsed.m).padStart(2, '0')}-${String(parsed.d).padStart(2, '0')}`;
-      }
-    }
-    let utc_days = Math.floor(value - 25569);
-    let utc_value = utc_days * 86400;
-    let date_info = new Date(utc_value * 1000);
-    if (!isNaN(date_info.getTime()) && date_info.getFullYear() > 2000 && date_info.getFullYear() < 2100) {
-      return `${date_info.getUTCFullYear()}-${String(date_info.getUTCMonth()+1).padStart(2,'0')}-${String(date_info.getUTCDate()).padStart(2,'0')}`;
-    }
-  }
-
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
     return formatLocalDate(value);
+  }
+
+  if (typeof value === 'number' && window.XLSX?.SSF) {
+    const parsed = XLSX.SSF.parse_date_code(value);
+    if (parsed) {
+      return `${parsed.y}-${String(parsed.m).padStart(2, '0')}-${String(parsed.d).padStart(2, '0')}`;
+    }
   }
 
   const text = String(value).trim();
@@ -171,21 +163,25 @@ function dateKey(value) {
   if (match) {
     let year = Number(match[3]);
     if (year < 100) year += 2000;
-    if (year > 2000 && year < 2100) {
-      return formatDateParts(year, Number(match[2]), Number(match[1]));
-    }
+
+    return formatDateParts(
+      year,
+      Number(match[2]),
+      Number(match[1])
+    );
   }
 
   const isoMatch = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
   if (isoMatch) {
-    let year = Number(isoMatch[1]);
-    if (year > 2000 && year < 2100) {
-      return formatDateParts(year, Number(isoMatch[2]), Number(isoMatch[3]));
-    }
+    return formatDateParts(
+      Number(isoMatch[1]),
+      Number(isoMatch[2]),
+      Number(isoMatch[3])
+    );
   }
 
   const direct = new Date(text);
-  if (!Number.isNaN(direct.getTime()) && direct.getFullYear() > 2000 && direct.getFullYear() < 2100) {
+  if (!Number.isNaN(direct.getTime())) {
     return formatLocalDate(direct);
   }
 
@@ -193,7 +189,48 @@ function dateKey(value) {
 }
 
 function monthFirstDateKey(value) {
-  return dateKey(value);
+  if (value === null || value === undefined || value === '') return '';
+
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return formatLocalDate(value);
+  }
+
+  if (typeof value === 'number' && window.XLSX?.SSF) {
+    const parsed = XLSX.SSF.parse_date_code(value);
+    if (parsed) {
+      return `${parsed.y}-${String(parsed.m).padStart(2, '0')}-${String(parsed.d).padStart(2, '0')}`;
+    }
+  }
+
+  const text = String(value).trim();
+  const match = text.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+  if (!match) {
+    const isoMatch = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    return isoMatch
+      ? formatDateParts(
+        Number(isoMatch[1]),
+        Number(isoMatch[2]),
+        Number(isoMatch[3])
+      )
+      : '';
+  }
+
+  let year = Number(match[3]);
+  if (year < 100) year += 2000;
+  const first = Number(match[1]);
+  const second = Number(match[2]);
+  const month = second > 12 && first <= 12
+    ? first
+    : (first > 12 && second <= 12 ? second : first);
+  const day = second > 12 && first <= 12
+    ? second
+    : (first > 12 && second <= 12 ? first : second);
+
+  return formatDateParts(
+    year,
+    month,
+    day
+  );
 }
 
 function parseGroupedScheduleSeconds(value) {
@@ -600,6 +637,8 @@ function parseSheetRows(sheet, options = {}) {
 
   if (headerRowIndex === -1) {
     if (allowGroupedScheduleFallback) {
+      // Some WFM exports are grouped reports where Agent/Date are row labels, not flat columns.
+      // In that case we reshape the hierarchy back into the flat rows expected by the rest of the app.
       const groupedRows = rowsFromGroupedScheduleMatrix(matrix);
       if (groupedRows) return groupedRows;
     }
@@ -658,7 +697,7 @@ function getDatesFromRows(rows, aliases) {
   rows.forEach(row => {
     const value = findValue(row, aliases, '');
     const key = dateKey(value);
-    if (key && key.length === 10 && key.startsWith('202')) dates.add(key);
+    if (key) dates.add(key);
   });
 
   return dates;
@@ -675,8 +714,7 @@ function getStructureDates(rows) {
       if (match) {
         const parsed = new Date(`${match[1]} ${match[2]} ${fallbackYear}`);
         if (!Number.isNaN(parsed.getTime())) {
-          const formatted = formatLocalDate(parsed);
-          if (formatted.startsWith('202')) dates.add(formatted);
+          dates.add(formatLocalDate(parsed));
         }
       }
     });
@@ -776,12 +814,14 @@ function hasPresentCandidate(presenceSet, candidates, day) {
   return candidates.some(candidate => presenceSet.has(makeLookupKey(candidate, day)));
 }
 
+// ─── Positional Schedule Parser ──────────────────────────────────────────────
+// Reads: Column B (idx 1) = Login ID, Column C (idx 2) = date/code, Column J (idx 9) = time
 function buildScheduleIndexByPosition(sheet) {
   if (!sheet) return { sumMap: new Map(), presenceSet: new Set() };
 
-  const COL_LOGIN = 1;
-  const COL_DATE  = 2;
-  const COL_TIME  = 9;
+  const COL_LOGIN = 1;   // Column B
+  const COL_DATE  = 2;   // Column C
+  const COL_TIME  = 9;   // Column J
 
   const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: false });
   const sumMap      = new Map();
@@ -806,6 +846,10 @@ function buildScheduleIndexByPosition(sheet) {
     const colC = String(row[COL_DATE]  ?? '').trim();
     const colJ = String(row[COL_TIME]  ?? '').trim();
 
+    // A new agent block starts when column B holds a standalone 5–6-digit login.
+    // The Login ID is the rightmost such number in the cell (e.g. a leading
+    // Teleopti/record ID may appear before the agent name, with the real
+    // Login ID at the end: "156958 Hesham nabil mohamed ali 86466" → 86466).
     if (colB) {
       const loginMatches = colB.match(/\b\d{5,6}\b/g);
       if (loginMatches && loginMatches.length) {
@@ -816,7 +860,7 @@ function buildScheduleIndexByPosition(sheet) {
 
     if (!currentLogin || !colC) continue;
 
-    const day = dateKey(colC);
+    const day = dateKey(colC) || monthFirstDateKey(colC);
     if (day) {
       flushPending();
       pendingDay = {
@@ -827,6 +871,7 @@ function buildScheduleIndexByPosition(sheet) {
         actSecs:    0
       };
     } else if (pendingDay && colJ) {
+      // Activity row under the current date – accumulate
       pendingDay.actSecs += parseSeconds(colJ);
     }
   }
@@ -835,6 +880,8 @@ function buildScheduleIndexByPosition(sheet) {
   return { sumMap, presenceSet };
 }
 
+// ─── Positional IR Counter ────────────────────────────────────────────────────
+// Counts rows where the value at `userColIndex` matches an agent's login ID.
 function buildIRCountIndexByColumnIndex(rows, userColIndex, dateAliases) {
   const map = new Map();
   rows.forEach(row => {
@@ -975,8 +1022,10 @@ async function processData() {
     status.textContent = `جاري بناء الفهارس وتجهيز ${dateGroups.length} تاريخ...`;
     progress.style.width = '75%';
 
-    const IR_COL_X = 23;
-    const IR_COL_Y = 24;
+    // ── IR: try column-position first (X=col 24 → Assigning, Y=col 25 → TKT),
+    //        fall back to header-name matching when column position yields nothing.
+    const IR_COL_X = 23; // Excel column X (0-indexed)
+    const IR_COL_Y = 24; // Excel column Y (0-indexed)
     const _irByPosX = buildIRCountIndexByColumnIndex(sourceRows.ir, IR_COL_X, FIELD_ALIASES.irDate);
     const _irByPosY = buildIRCountIndexByColumnIndex(sourceRows.ir, IR_COL_Y, FIELD_ALIASES.irDate);
     const irAssigningIndex = _irByPosX.size
@@ -1000,6 +1049,8 @@ async function processData() {
       FIELD_ALIASES.compDuration
     );
 
+    // ── Schedule: try column-position first (B=login, C=date, J=time),
+    //              fall back to header-name matching when no data is found.
     const _schedSheetName = _scheduleWorkbook
       ? getOrderedSheetNames(_scheduleWorkbook,
           ['schedule', 'scheduled time', 'scheduled time per agent', 'scheduled'])[0]
@@ -1346,8 +1397,6 @@ function buildExportRows(rows) {
       'Status': row.status,
       'TL Name': row.tlName
     };
-
-    dateGroups.dateGroups?.forEach(day => { }); // Safety placeholder
 
     dateGroups.forEach(day => {
       if (collapsedDays[day]) return;
