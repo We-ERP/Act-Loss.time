@@ -45,7 +45,7 @@ const FIELD_ALIASES = {
   compDate: ['Comp_Da', 'Date'],
   compDuration: ['Comp_Du', 'Comp Duration', 'Duration'],
   structureDate: ['ST_D', 'Date'],
-  structureDuration: ['ST_Du', 'ST Duration', 'Duration'],
+  structureDuration: ['ST_Du', 'ST Duration', 'Duration', 'Tele-SCH', 'Tele_SCH', 'Scheduled time'],
   scheduleAgent: ['Agent', 'Agent Name', 'Employee', 'Employee Name'],
   scheduleDate: ['Date', 'Scheduled Date'],
   scheduleDuration: ['Scheduled time', 'Scheduled Time', 'Scheduled time (hh:mm:ss)', 'Scheduled Time (hh:mm:ss)', 'Scheduled-Time', 'Scheduled_Time']
@@ -59,17 +59,6 @@ const REQUIRED_HEADER_ALIASES = {
   ]
 };
 
-const GROUPED_SCHEDULE_HEADER_ALIASES = [
-  ['Contract time', 'Contract time (hh:mm)', 'Contract time (hh:mm:ss)'],
-  ['Work time', 'Work time (hh:mm)', 'Work time (hh:mm:ss)'],
-  ['Paid time', 'Paid time (hh:mm)', 'Paid time (hh:mm:ss)'],
-  ['Scheduled overtime', 'Scheduled overtime (hh:mm)', 'Scheduled overtime (hh:mm:ss)'],
-  ['Contract absence time', 'Contract absence time (hh:mm)', 'Contract absence time (hh:mm:ss)'],
-  FIELD_ALIASES.scheduleDuration,
-  ['Planned overtime', 'Planned overtime (hh:mm)', 'Planned overtime (hh:mm:ss)']
-];
-
-const GROUPED_SCHEDULE_TOTALS_ALIASES = ['Totals', 'Total', 'الإجمالي', 'إجمالي', 'المجموع'];
 const BASE_COLUMN_LABELS = [
   'Teleopti ID',
   'Login ID',
@@ -156,17 +145,23 @@ function flexibleDateKey(value) {
     }
   }
 
-  const text = String(value).trim();
+  // إزالة المسافات المخفية لضمان قراءة التواريخ بشكل صحيح من شيت الـ IR
+  let text = String(value).trim().replace(/[\u00A0\u202F]/g, ' ').replace(/\s+/g, ' ');
   if (!text) return '';
 
-  // Try Native JS parsing first (Perfect for "9/1/2026 8:41:42 AM" format)
-  const d = new Date(text);
+  let datePart = text.split(' ')[0];
+
+  const d = new Date(datePart);
   if (!Number.isNaN(d.getTime())) {
     return formatLocalDate(d);
   }
 
-  // Fallback for DD/MM/YYYY or DD-MM-YYYY if standard parsing fails
-  const match = text.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
+  const fullD = new Date(text);
+  if (!Number.isNaN(fullD.getTime())) {
+    return formatLocalDate(fullD);
+  }
+
+  const match = datePart.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
   if (match) {
     let year = Number(match[3]);
     if (year < 100) year += 2000;
@@ -179,24 +174,6 @@ function flexibleDateKey(value) {
   }
 
   return '';
-}
-
-function parseGroupedScheduleSeconds(value) {
-  if (value === null || value === undefined || value === '') return 0;
-
-  if (typeof value === 'number') {
-    return parseSeconds(value);
-  }
-
-  const text = String(value).trim();
-  if (!text) return 0;
-
-  const parts = text.split(':').map(Number);
-  if (parts.length === 2) {
-    return (parts[0] || 0) * 3600 + (parts[1] || 0) * 60;
-  }
-
-  return parseSeconds(value);
 }
 
 function displayDate(value) {
@@ -239,7 +216,7 @@ function parseSeconds(value) {
   }
 
   if (parts.length === 2) {
-    return (parts[0] || 0) * 60 + (parts[1] || 0);
+    return (parts[0] || 0) * 3600 + (parts[1] || 0) * 60;
   }
 
   return Number(text) || 0;
@@ -388,187 +365,11 @@ function rowsFromMatrix(matrix, headerRowIndex) {
     });
 }
 
-function detectGroupedScheduleHeader(matrix) {
-  let bestMatch = null;
-
-  matrix.forEach((row, index) => {
-    const scheduledTimeColumnIndex = row.findIndex(cell =>
-      matchesAnyAlias(cell, FIELD_ALIASES.scheduleDuration)
-    );
-
-    if (scheduledTimeColumnIndex === -1) return;
-
-    const score = GROUPED_SCHEDULE_HEADER_ALIASES.filter(aliases =>
-      row.some(cell => matchesAnyAlias(cell, aliases))
-    ).length;
-
-    if (!bestMatch || score > bestMatch.score) {
-      bestMatch = { headerRowIndex: index, scheduledTimeColumnIndex, score };
-    }
-  });
-
-  return bestMatch;
-}
-
-function getGroupedScheduleLabelCell(row, scheduledTimeColumnIndex) {
-  const limit = scheduledTimeColumnIndex > 0 ? scheduledTimeColumnIndex : row.length;
-
-  for (let index = 0; index < limit; index += 1) {
-    const value = row[index];
-    const text = String(value ?? '').trim();
-
-    if (text) {
-      return { value, text, index };
-    }
-  }
-
-  return null;
-}
-
-function extractGroupedScheduleNumberPrefixedAgentName(label) {
-  const match = String(label ?? '')
-    .trim()
-    .match(/^\d+\s+(.+?)(?:\s+\d+)?$/);
-
-  if (!match) return '';
-
-  const agentName = match[1].trim();
-  return /[a-z\u0600-\u06ff]/i.test(agentName)
-    ? agentName
-    : '';
-}
-
-function inferGroupedScheduleAgentName(rows, rowIndex, scheduledTimeColumnIndex, labelCell) {
-  if (!/[a-z\u0600-\u06ff]/i.test(labelCell.text)) return '';
-
-  for (let index = rowIndex + 1; index < rows.length; index += 1) {
-    const nextLabelCell = getGroupedScheduleLabelCell(rows[index], scheduledTimeColumnIndex);
-    if (!nextLabelCell) continue;
-
-    if (matchesAnyAlias(nextLabelCell.text, GROUPED_SCHEDULE_TOTALS_ALIASES)) {
-      return '';
-    }
-
-    if (
-      extractGroupedScheduleNumberPrefixedAgentName(nextLabelCell.text) ||
-      nextLabelCell.index <= labelCell.index
-    ) {
-      return '';
-    }
-
-    if (flexibleDateKey(nextLabelCell.value)) {
-      return labelCell.text.trim();
-    }
-  }
-
-  return '';
-}
-
-function resolveGroupedScheduleAgentName(rows, rowIndex, scheduledTimeColumnIndex, labelCell) {
-  return extractGroupedScheduleNumberPrefixedAgentName(labelCell.text) ||
-    inferGroupedScheduleAgentName(rows, rowIndex, scheduledTimeColumnIndex, labelCell);
-}
-
-function rowsFromGroupedScheduleMatrix(matrix) {
-  const headerInfo = detectGroupedScheduleHeader(matrix);
-  if (!headerInfo) return null;
-
-  const { headerRowIndex, scheduledTimeColumnIndex } = headerInfo;
-  const dataRows = matrix.slice(headerRowIndex + 1);
-  const rows = [];
-  let currentAgent = '';
-  let pendingDay = null;
-
-  function flushPendingDay() {
-    if (!pendingDay?.agent || !pendingDay.day) {
-      pendingDay = null;
-      return;
-    }
-
-    const durationSeconds = pendingDay.hasDirectValue
-      ? parseGroupedScheduleSeconds(pendingDay.rawDuration)
-      : pendingDay.activityDurationSeconds;
-
-    rows.push({
-      [FIELD_ALIASES.scheduleAgent[0]]: pendingDay.agent,
-      [FIELD_ALIASES.scheduleDate[0]]: pendingDay.day,
-      [FIELD_ALIASES.scheduleDuration[0]]: formatTime(durationSeconds)
-    });
-
-    pendingDay = null;
-  }
-
-  dataRows.forEach((row, rowIndex) => {
-    const labelCell = getGroupedScheduleLabelCell(row, scheduledTimeColumnIndex);
-    if (!labelCell) return;
-
-    const labelText = labelCell.text;
-    const day = flexibleDateKey(labelCell.value);
-    const agentName = resolveGroupedScheduleAgentName(
-      dataRows,
-      rowIndex,
-      scheduledTimeColumnIndex,
-      labelCell
-    );
-
-    if (
-      pendingDay &&
-      !day &&
-      !agentName &&
-      labelCell.index <= pendingDay.labelIndex
-    ) {
-      flushPendingDay();
-    }
-
-    if (matchesAnyAlias(labelText, GROUPED_SCHEDULE_TOTALS_ALIASES)) {
-      flushPendingDay();
-      currentAgent = '';
-      return;
-    }
-
-    if (agentName) {
-      flushPendingDay();
-      currentAgent = agentName;
-      return;
-    }
-
-    if (day) {
-      flushPendingDay();
-
-      if (!currentAgent) return;
-
-      const rawDuration = row[scheduledTimeColumnIndex] ?? '';
-      pendingDay = {
-        agent: currentAgent,
-        day,
-        labelIndex: labelCell.index,
-        rawDuration,
-        hasDirectValue: String(rawDuration ?? '').trim() !== '',
-        activityDurationSeconds: 0
-      };
-      return;
-    }
-
-    if (!pendingDay || labelCell.index <= pendingDay.labelIndex) {
-      return;
-    }
-
-    const activityDuration = row[scheduledTimeColumnIndex] ?? '';
-    if (String(activityDuration ?? '').trim() === '') return;
-
-    pendingDay.activityDurationSeconds += parseGroupedScheduleSeconds(activityDuration);
-  });
-
-  flushPendingDay();
-  return rows;
-}
-
 function parseSheetRows(sheet, options = {}) {
   const {
     requiredHeaderAliases,
     label = 'الشيت',
-    sheetName = '',
-    allowGroupedScheduleFallback = false
+    sheetName = ''
   } = options;
 
   if (!sheet) return [];
@@ -584,11 +385,6 @@ function parseSheetRows(sheet, options = {}) {
   const headerRowIndex = detectHeaderRow(matrix, requiredHeaderAliases);
 
   if (headerRowIndex === -1) {
-    if (allowGroupedScheduleFallback) {
-      const groupedRows = rowsFromGroupedScheduleMatrix(matrix);
-      if (groupedRows) return groupedRows;
-    }
-
     throw new Error(
       `تعذر اكتشاف صف العناوين في ${label}${sheetName ? ` (${sheetName})` : ''}. تأكد من وجود الأعمدة المطلوبة.`
     );
@@ -718,26 +514,6 @@ function buildSumIndex(rows, userAliases, dateAliases, valueAliases) {
   return map;
 }
 
-function buildDurationPresenceIndex(rows, userAliases, dateAliases, valueAliases) {
-  const set = new Set();
-
-  rows.forEach(row => {
-    const rawValue = findValue(row, valueAliases, '');
-    const rawDate = findValue(row, dateAliases, '');
-    const day = flexibleDateKey(rawDate);
-    const key = makeLookupKey(
-      findValue(row, userAliases, ''),
-      day
-    );
-
-    if (key && String(rawValue ?? '').trim() !== '') {
-      set.add(key);
-    }
-  });
-
-  return set;
-}
-
 function buildTalkTimeIndex(rows) {
   const map = new Map();
 
@@ -768,7 +544,6 @@ function getPresentIndexedValueByCandidates(map, presenceSet, candidates, day) {
       return map.get(key) || 0;
     }
   }
-
   return 0;
 }
 
@@ -776,63 +551,63 @@ function hasPresentCandidate(presenceSet, candidates, day) {
   return candidates.some(candidate => presenceSet.has(makeLookupKey(candidate, day)));
 }
 
+// التعديل الخاص بملف الـ Schedule بناءً على الصورة الجديدة
 function buildScheduleIndexByPosition(sheet) {
   if (!sheet) return { sumMap: new Map(), presenceSet: new Set() };
 
-  const COL_LOGIN = 1;
-  const COL_DATE  = 2;
-  const COL_TIME  = 9;
-
   const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: false });
-  const sumMap      = new Map();
+  const sumMap = new Map();
   const presenceSet = new Set();
 
-  let currentLogin = '';
-  let pendingDay   = null;
+  const COL_LOGIN = 1; // عمود B
+  const COL_DATE_OR_ACTIVITY = 2; // عمود C
+  let COL_TIME = 9; // عمود J افتراضياً
 
-  const flushPending = () => {
-    if (!pendingDay) return;
-    const { login, day, directSecs, hasValue, actSecs } = pendingDay;
-    const secs = hasValue ? directSecs : actSecs;
-    if (login && day && secs > 0) {
-      addToIndex(sumMap, login, day, secs);
-      presenceSet.add(makeLookupKey(login, day));
-    }
-    pendingDay = null;
-  };
-
-  for (let i = 0; i < matrix.length; i++) {
+  // تحديد عمود Scheduled time ديناميكياً لتفادي أخطاء ترتيب العواميد
+  for (let i = 0; i < Math.min(30, matrix.length); i++) {
     const row = matrix[i];
-    const colB = String(row[COL_LOGIN] ?? '').trim();
-    const colC = String(row[COL_DATE]  ?? '').trim();
-    const colJ = String(row[COL_TIME]  ?? '').trim();
-
-    if (colB) {
-      const loginMatches = colB.match(/\b\d{4,6}\b/g);
-      if (loginMatches && loginMatches.length) {
-        flushPending();
-        currentLogin = loginMatches[loginMatches.length - 1];
-      }
-    }
-
-    if (!currentLogin || !colC) continue;
-
-    const day = flexibleDateKey(colC);
-    if (day) {
-      flushPending();
-      pendingDay = {
-        login: currentLogin,
-        day,
-        directSecs: colJ ? parseSeconds(colJ) : 0,
-        hasValue:   Boolean(colJ),
-        actSecs:    0
-      };
-    } else if (pendingDay && colJ) {
-      pendingDay.actSecs += parseSeconds(colJ);
+    for (let j = 0; j < row.length; j++) {
+       const val = String(row[j] ?? '').toLowerCase();
+       if (val.includes('scheduled time') && !val.includes('overtime')) {
+           COL_TIME = j;
+       }
     }
   }
 
-  flushPending();
+  let currentLogins = [];
+
+  for (let i = 0; i < matrix.length; i++) {
+    const row = matrix[i];
+    if (!row || !row.length) continue;
+
+    const colB = String(row[COL_LOGIN] ?? '').trim();
+    const colC = String(row[COL_DATE_OR_ACTIVITY] ?? '').trim();
+    const colTime = String(row[COL_TIME] ?? '').trim();
+
+    // استخراج أرقام الموظف (الـ Login والـ Teleopti) من عمود B
+    if (colB && /\d{4,6}/.test(colB)) {
+      const matches = colB.match(/\b\d{4,6}\b/g);
+      if (matches && matches.length) {
+        currentLogins = matches;
+      }
+    }
+
+    if (currentLogins.length === 0 || !colC) continue;
+
+    // التأكد من أن السطر الحالي هو سطر "تاريخ" وليس نشاط فرعي مثل Break أو Phone
+    const day = flexibleDateKey(colC);
+    if (day && colTime) {
+       const secs = parseSeconds(colTime);
+       if (secs > 0) {
+          // ربط الساعات المكتشفة بجميع الأرقام المستخرجة لضمان المطابقة
+          currentLogins.forEach(log => {
+              addToIndex(sumMap, log, day, secs);
+              presenceSet.add(makeLookupKey(log, day));
+          });
+       }
+    }
+  }
+
   return { sumMap, presenceSet };
 }
 
@@ -905,12 +680,7 @@ async function processData() {
       try {
         sourceRows.schedule = chooseSheet(
           _scheduleWorkbook,
-          ['schedule', 'scheduled time', 'scheduled time per agent', 'scheduled'],
-          {
-            allowGroupedScheduleFallback: true,
-            label: 'ملف Schedule / Scheduled Time per Agent',
-            requiredHeaderAliases: REQUIRED_HEADER_ALIASES.schedule
-          }
+          ['schedule', 'scheduled time', 'scheduled time per agent', 'scheduled']
         );
       } catch {
         sourceRows.schedule = [];
@@ -989,12 +759,8 @@ async function processData() {
     const { sumMap: _schedByPos, presenceSet: _schedPresenceByPos } =
       buildScheduleIndexByPosition(_schedSheet);
 
-    const scheduleIndex = _schedByPos.size
-      ? _schedByPos
-      : buildSumIndex(sourceRows.schedule, FIELD_ALIASES.scheduleAgent, FIELD_ALIASES.scheduleDate, FIELD_ALIASES.scheduleDuration);
-    const scheduleDurationPresenceIndex = _schedByPos.size
-      ? _schedPresenceByPos
-      : buildDurationPresenceIndex(sourceRows.schedule, FIELD_ALIASES.scheduleAgent, FIELD_ALIASES.scheduleDate, FIELD_ALIASES.scheduleDuration);
+    const scheduleIndex = _schedByPos;
+    const scheduleDurationPresenceIndex = _schedPresenceByPos;
     const hasSchedule = scheduleDurationPresenceIndex.size > 0;
 
     processedMatrixData = sourceRows.structure.map(row => {
@@ -1033,7 +799,7 @@ async function processData() {
         }
         
         const systemDecimal = tkt * 0.00104166666666667;
-        const systemSeconds = tkt * 90; // Exactly equivalent in seconds for Loss Time calc
+        const systemSeconds = tkt * 90;
 
         const talkTime = getIndexedValue(talkTimeIndex, loginId, day);
 
