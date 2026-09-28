@@ -73,9 +73,13 @@ const GROUPED_SCHEDULE_TOTALS_ALIASES = ['Totals', 'Total', 'الإجمالي', 
 const BASE_COLUMN_LABELS = [
   'Teleopti ID',
   'Login ID',
+  'Perm',
   'TTS User',
+  'BSS User',
+  'Group',
   'Agent Name',
   'Status',
+  'TL ID',
   'TL Name'
 ];
 const DAY_METRIC_LABELS = [
@@ -203,11 +207,7 @@ function monthFirstDateKey(value) {
   }
 
   const text = String(value).trim();
-
-  // Strip time component from datetime strings (e.g. "9/1/2026 8:41:42 AM")
-  const stripped = text.replace(/^(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\s+.*$/, '$1');
-
-  const match = stripped.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+  const match = text.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
   if (!match) {
     const isoMatch = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
     return isoMatch
@@ -818,92 +818,6 @@ function hasPresentCandidate(presenceSet, candidates, day) {
   return candidates.some(candidate => presenceSet.has(makeLookupKey(candidate, day)));
 }
 
-// ─── Positional Schedule Parser ──────────────────────────────────────────────
-// Reads: Column B (idx 1) = Login ID, Column C (idx 2) = date/code, Column J (idx 9) = time
-function buildScheduleIndexByPosition(sheet) {
-  if (!sheet) return { sumMap: new Map(), presenceSet: new Set() };
-
-  const COL_LOGIN = 1;   // Column B
-  const COL_DATE  = 2;   // Column C
-  const COL_TIME  = 9;   // Column J
-
-  const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: false });
-  const sumMap      = new Map();
-  const presenceSet = new Set();
-
-  let currentLogin = '';
-  let pendingDay   = null;
-
-  const flushPending = () => {
-    if (!pendingDay) return;
-    const { login, day, directSecs, hasValue, actSecs } = pendingDay;
-    const secs = hasValue ? directSecs : actSecs;
-    if (login && day && secs > 0) {
-      addToIndex(sumMap, login, day, secs);
-      presenceSet.add(makeLookupKey(login, day));
-    }
-    pendingDay = null;
-  };
-
-  for (const row of matrix) {
-    const colB = String(row[COL_LOGIN] ?? '').trim();
-    const colC = String(row[COL_DATE]  ?? '').trim();
-    const colJ = String(row[COL_TIME]  ?? '').trim();
-
-    // A new agent block starts when column B holds a standalone 5–6-digit login
-    if (colB) {
-      const loginMatch = colB.match(/\b(\d{5,6})\b/);
-      if (loginMatch) {
-        flushPending();
-        currentLogin = loginMatch[1];
-      }
-    }
-
-    if (!currentLogin || !colC) continue;
-
-    const day = dateKey(colC) || monthFirstDateKey(colC);
-    if (day) {
-      flushPending();
-      pendingDay = {
-        login: currentLogin,
-        day,
-        directSecs: colJ ? parseSeconds(colJ) : 0,
-        hasValue:   Boolean(colJ),
-        actSecs:    0
-      };
-    } else if (pendingDay && colJ) {
-      // Activity row under the current date – accumulate
-      pendingDay.actSecs += parseSeconds(colJ);
-    }
-  }
-
-  flushPending();
-  return { sumMap, presenceSet };
-}
-
-// ─── Positional IR Counter ────────────────────────────────────────────────────
-// Counts rows where the value at `userColIndex` matches an agent's login ID.
-function buildIRCountIndexByColumnIndex(rows, userColIndex, dateAliases, dateColIndex) {
-  const map = new Map();
-  rows.forEach(row => {
-    const vals = Object.values(row);
-    const user = String(vals[userColIndex] ?? '').trim();
-
-    // Try named date column first, then positional fallback (column Z)
-    let rawDate = findValue(row, dateAliases, '');
-    if (!rawDate && dateColIndex !== undefined) {
-      rawDate = String(vals[dateColIndex] ?? '').trim();
-    }
-
-    // Strip time component from datetime strings like "9/1/2026 8:41:42 AM"
-    const dateStr = String(rawDate ?? '').split(/\s+/)[0];
-    const day = monthFirstDateKey(dateStr) || dateKey(dateStr) || dateKey(String(rawDate ?? ''));
-
-    if (user && day) addToIndex(map, user, day, 1);
-  });
-  return map;
-}
-
 function getSourceSummary() {
   return [
     `Structure: ${sourceLabels.structure}`,
@@ -943,46 +857,33 @@ async function processData() {
   try {
     status.textContent = 'جاري تحميل Structure...';
 
-    const structureSheetOptions = {
-      requiredHeaderAliases: [FIELD_ALIASES.agentName],
-      label: 'ملف Structure Master'
-    };
-
     if (!filesState.struct) {
       sourceRows.structure = chooseSheet(
         await readBundledStructure(),
-        ['structure', 'str', 'loss', 'master', 'sep', 'updated'],
-        structureSheetOptions
+        ['structure', 'str', 'loss', 'master']
       );
       sourceLabels.structure = 'STR Loss.xlsx من المستودع';
     } else {
       sourceRows.structure = chooseSheet(
         await readWorkbook(filesState.struct),
-        ['structure', 'str', 'loss', 'master', 'sep', 'updated'],
-        structureSheetOptions
+        ['structure', 'str', 'loss', 'master']
       );
       sourceLabels.structure = filesState.struct.name;
     }
 
     progress.style.width = '18%';
 
-    let _scheduleWorkbook = null;
     if (filesState.schedule) {
       status.textContent = 'جاري قراءة Schedule / Scheduled Time per Agent...';
-      _scheduleWorkbook = await readWorkbook(filesState.schedule);
-      try {
-        sourceRows.schedule = chooseSheet(
-          _scheduleWorkbook,
-          ['schedule', 'scheduled time', 'scheduled time per agent', 'scheduled'],
-          {
-            allowGroupedScheduleFallback: true,
-            label: 'ملف Schedule / Scheduled Time per Agent',
-            requiredHeaderAliases: REQUIRED_HEADER_ALIASES.schedule
-          }
-        );
-      } catch {
-        sourceRows.schedule = [];
-      }
+      sourceRows.schedule = chooseSheet(
+        await readWorkbook(filesState.schedule),
+        ['schedule', 'scheduled time', 'scheduled time per agent', 'scheduled'],
+        {
+          allowGroupedScheduleFallback: true,
+          label: 'ملف Schedule / Scheduled Time per Agent',
+          requiredHeaderAliases: REQUIRED_HEADER_ALIASES.schedule
+        }
+      );
       sourceLabels.schedule = filesState.schedule.name;
     } else {
       sourceRows.schedule = [];
@@ -1033,20 +934,16 @@ async function processData() {
     status.textContent = `جاري بناء الفهارس وتجهيز ${dateGroups.length} تاريخ...`;
     progress.style.width = '75%';
 
-    // ── IR: assigned_to (col X=23) → Assigning Tkts  |  added_by (col Y=24) → TKT  |  added_on (col Z=25) → date
-    //        Both user fields contain TTS User values → look up by ttsUser in the matrix loop.
-    const IR_COL_X = 23; // Excel column X → assigned_to  → Assigning Tkts
-    const IR_COL_Y = 24; // Excel column Y → added_by     → TKT
-    const IR_COL_Z = 25; // Excel column Z → added_on     → date ("M/D/YYYY H:MM:SS AM/PM")
-    const _irByPosX = buildIRCountIndexByColumnIndex(sourceRows.ir, IR_COL_X, FIELD_ALIASES.irDate, IR_COL_Z);
-    const _irByPosY = buildIRCountIndexByColumnIndex(sourceRows.ir, IR_COL_Y, FIELD_ALIASES.irDate, IR_COL_Z);
-    const irAssigningIndex = _irByPosX.size
-      ? _irByPosX
-      : buildCountIndex(sourceRows.ir, FIELD_ALIASES.irAssigned, FIELD_ALIASES.irDate);
-    const irTktIndex = _irByPosY.size
-      ? _irByPosY
-      : buildCountIndex(sourceRows.ir, ['added_by', 'IR_L_E'], FIELD_ALIASES.irDate);
-
+    const irAssigningIndex = buildCountIndex(
+      sourceRows.ir,
+      FIELD_ALIASES.irAssigned,
+      FIELD_ALIASES.irDate
+    );
+    const irTktIndex = buildCountIndex(
+      sourceRows.ir,
+      ['IR_L_E'],
+      FIELD_ALIASES.irDate
+    );
     const talkTimeIndex = buildTalkTimeIndex(sourceRows.utl);
     const structureDurationIndex = buildSumIndex(
       sourceRows.structure,
@@ -1060,23 +957,18 @@ async function processData() {
       FIELD_ALIASES.compDate,
       FIELD_ALIASES.compDuration
     );
-
-    // ── Schedule: try column-position first (B=login, C=date, J=time),
-    //              fall back to header-name matching when no data is found.
-    const _schedSheetName = _scheduleWorkbook
-      ? getOrderedSheetNames(_scheduleWorkbook,
-          ['schedule', 'scheduled time', 'scheduled time per agent', 'scheduled'])[0]
-      : null;
-    const _schedSheet = _schedSheetName ? _scheduleWorkbook.Sheets[_schedSheetName] : null;
-    const { sumMap: _schedByPos, presenceSet: _schedPresenceByPos } =
-      buildScheduleIndexByPosition(_schedSheet);
-
-    const scheduleIndex = _schedByPos.size
-      ? _schedByPos
-      : buildSumIndex(sourceRows.schedule, FIELD_ALIASES.scheduleAgent, FIELD_ALIASES.scheduleDate, FIELD_ALIASES.scheduleDuration);
-    const scheduleDurationPresenceIndex = _schedByPos.size
-      ? _schedPresenceByPos
-      : buildDurationPresenceIndex(sourceRows.schedule, FIELD_ALIASES.scheduleAgent, FIELD_ALIASES.scheduleDate, FIELD_ALIASES.scheduleDuration);
+    const scheduleIndex = buildSumIndex(
+      sourceRows.schedule,
+      FIELD_ALIASES.scheduleAgent,
+      FIELD_ALIASES.scheduleDate,
+      FIELD_ALIASES.scheduleDuration
+    );
+    const scheduleDurationPresenceIndex = buildDurationPresenceIndex(
+      sourceRows.schedule,
+      FIELD_ALIASES.scheduleAgent,
+      FIELD_ALIASES.scheduleDate,
+      FIELD_ALIASES.scheduleDuration
+    );
     const hasSchedule = scheduleDurationPresenceIndex.size > 0;
 
     processedMatrixData = sourceRows.structure.map(row => {
@@ -1094,16 +986,9 @@ async function processData() {
       const days = {};
 
       dateGroups.forEach(day => {
-        // IR: both assigned_to and added_by store TTS User values → look up by ttsUser
-        const assigning = getIndexedValue(irAssigningIndex, ttsUser, day);
-        const tkt       = getIndexedValue(irTktIndex,       ttsUser, day);
-
-        // System = count of added_by tickets × factor (each ticket ≈ 90 seconds / 86400)
+        const assigning = getIndexedValue(irAssigningIndex, loginId, day);
+        const tkt = getIndexedValue(irTktIndex, loginId, day);
         const system = tkt * 0.00104166666666667;
-
-        // systemSeconds: convert System (Excel day fraction) → seconds for Loss Time calc
-        const systemSeconds = Math.round(system * 86400); // = tkt × 90
-
         const talkTime = getIndexedValue(talkTimeIndex, loginId, day);
 
         const scheduleSeconds = hasSchedule
@@ -1127,11 +1012,9 @@ async function processData() {
         const teleSchedule = teleScheduleBase * 0.9;
         const comp = getIndexedValue(compIndex, teleoptiId, day);
 
-        // Loss Time = Tele-SCH×90% − (System + Talk Time + Comp)
-        // teleSchedule already has ×0.9 applied; systemSeconds converts the ticket count to seconds
         const loss = String(statusValue).trim().toLowerCase() !== 'active'
           ? statusValue
-          : formatTime(Math.max(0, teleSchedule - systemSeconds - talkTime - comp));
+          : formatTime(Math.max(0, teleSchedule - talkTime - comp));
 
         days[day] = {
           assigning,
@@ -1283,9 +1166,13 @@ function renderMatrixTable(rows) {
     [
       row.teleoptiId,
       row.loginId,
+      row.perm,
       row.ttsUser,
+      row.bssUser,
+      row.group,
       row.agentName,
       row.status,
+      row.tlId,
       row.tlName
     ].forEach(value => {
       const td = document.createElement('td');
@@ -1413,9 +1300,13 @@ function buildExportRows(rows) {
     const result = {
       'Teleopti ID': row.teleoptiId,
       'Login ID': row.loginId,
+      'Perm': row.perm,
       'TTS User': row.ttsUser,
+      'BSS User': row.bssUser,
+      'Group': row.group,
       'Agent Name': row.agentName,
       'Status': row.status,
+      'TL ID': row.tlId,
       'TL Name': row.tlName
     };
 
