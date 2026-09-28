@@ -36,8 +36,8 @@ const FIELD_ALIASES = {
   status: ['Status'],
   tlId: ['TL ID', 'TL Id'],
   tlName: ['TL Name', 'Team Leader', 'TL'],
-  irUser: ['IR_L_E', 'added_by', 'User', 'Login ID'],
-  irAssigned: ['assigned_to', 'assigned to', 'Assignee'],
+  irUser: ['IR_L_E', 'added_by', 'User', 'Login ID', 'TTS User', 'TTS', 'Agent Name'],
+  irAssigned: ['assigned_to', 'assigned to', 'Assignee', 'TTS User', 'TTS', 'User'],
   irDate: ['added_on', 'Date', 'Date/Time'],
   utlUser: ['UL_lo', 'Login ID', 'Login', 'User'],
   utlDate: ['UL_Date', 'Date'],
@@ -159,7 +159,6 @@ function dateKey(value) {
   const text = String(value).trim();
   if (!text) return '';
 
-  // استخراج التاريخ في حال وجود وقت ملاصق مثل M/D/YYYY HH:MM:SS AM/PM
   const match = text.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
   if (match) {
     let year = Number(match[3]);
@@ -737,7 +736,18 @@ function buildCountIndex(rows, userAliases, dateAliases) {
   const map = new Map();
 
   rows.forEach(row => {
-    const user = findValue(row, userAliases, '');
+    let user = '';
+    for (const alias of userAliases) {
+      const val = findValue(row, [alias], '');
+      if (String(val ?? '').trim() !== '') {
+        user = val;
+        break;
+      }
+    }
+    if (!user) {
+      user = findValue(row, ['User', 'TTS User', 'TTS', 'Login ID', 'Login', 'Agent Name', 'Agent'], '');
+    }
+
     const rawDate = findValue(row, dateAliases, '');
     const day = dateKey(rawDate) || monthFirstDateKey(rawDate);
     addToIndex(map, user, day, 1);
@@ -1054,8 +1064,25 @@ async function processData() {
       const days = {};
 
       dateGroups.forEach(day => {
-        const rawAssigning = getIndexedValue(irAssigningIndex, ttsUser, day);
-        const tkt = getIndexedValue(irTktIndex, ttsUser, day);
+        const lookupCandidates = [ttsUser, loginId, agentName, teleoptiId].filter(Boolean);
+        let rawAssigning = 0;
+        let tkt = 0;
+
+        for (const candidate of lookupCandidates) {
+          const key = makeLookupKey(candidate, day);
+          if (irAssigningIndex.has(key)) {
+            rawAssigning = irAssigningIndex.get(key);
+            break;
+          }
+        }
+
+        for (const candidate of lookupCandidates) {
+          const key = makeLookupKey(candidate, day);
+          if (irTktIndex.has(key)) {
+            tkt = irTktIndex.get(key);
+            break;
+          }
+        }
         
         const systemDecimal = tkt * 0.00104166666666667;
         const systemSeconds = Math.round(systemDecimal * 86400); 
