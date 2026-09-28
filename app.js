@@ -203,6 +203,8 @@ function monthFirstDateKey(value) {
   }
 
   const text = String(value).trim();
+
+  // Strip time component from datetime strings (e.g. "9/1/2026 8:41:42 AM")
   const stripped = text.replace(/^(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\s+.*$/, '$1');
 
   const match = stripped.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
@@ -639,6 +641,8 @@ function parseSheetRows(sheet, options = {}) {
 
   if (headerRowIndex === -1) {
     if (allowGroupedScheduleFallback) {
+      // Some WFM exports are grouped reports where Agent/Date are row labels, not flat columns.
+      // In that case we reshape the hierarchy back into the flat rows expected by the rest of the app.
       const groupedRows = rowsFromGroupedScheduleMatrix(matrix);
       if (groupedRows) return groupedRows;
     }
@@ -696,7 +700,7 @@ function getDatesFromRows(rows, aliases) {
 
   rows.forEach(row => {
     const value = findValue(row, aliases, '');
-    const key = dateKey(value) || monthFirstDateKey(value);
+    const key = dateKey(value);
     if (key) dates.add(key);
   });
 
@@ -739,7 +743,7 @@ function buildCountIndex(rows, userAliases, dateAliases) {
 
   rows.forEach(row => {
     const user = findValue(row, userAliases, '');
-    const day = dateKey(findValue(row, dateAliases, '')) || monthFirstDateKey(findValue(row, dateAliases, ''));
+    const day = dateKey(findValue(row, dateAliases, ''));
     addToIndex(map, user, day, 1);
   });
 
@@ -751,7 +755,7 @@ function buildSumIndex(rows, userAliases, dateAliases, valueAliases) {
 
   rows.forEach(row => {
     const user = findValue(row, userAliases, '');
-    const day = dateKey(findValue(row, dateAliases, '')) || monthFirstDateKey(findValue(row, dateAliases, ''));
+    const day = dateKey(findValue(row, dateAliases, ''));
     const amount = parseSeconds(findValue(row, valueAliases, 0));
     addToIndex(map, user, day, amount);
   });
@@ -764,10 +768,9 @@ function buildDurationPresenceIndex(rows, userAliases, dateAliases, valueAliases
 
   rows.forEach(row => {
     const rawValue = findValue(row, valueAliases, '');
-    const rawDate = findValue(row, dateAliases, '');
     const key = makeLookupKey(
       findValue(row, userAliases, ''),
-      dateKey(rawDate) || monthFirstDateKey(rawDate)
+      dateKey(findValue(row, dateAliases, ''))
     );
 
     if (key && String(rawValue ?? '').trim() !== '') {
@@ -783,8 +786,7 @@ function buildTalkTimeIndex(rows) {
 
   rows.forEach(row => {
     const user = findValue(row, FIELD_ALIASES.utlUser, '');
-    const rawDate = findValue(row, FIELD_ALIASES.utlDate, '');
-    const day = dateKey(rawDate) || monthFirstDateKey(rawDate);
+    const day = dateKey(findValue(row, FIELD_ALIASES.utlDate, ''));
     const total =
       parseSeconds(findValue(row, ['Hold Time', 'HoldTime'], 0)) +
       parseSeconds(findValue(row, ['Other Time', 'OtherTime'], 0)) +
@@ -816,12 +818,14 @@ function hasPresentCandidate(presenceSet, candidates, day) {
   return candidates.some(candidate => presenceSet.has(makeLookupKey(candidate, day)));
 }
 
+// ─── Positional Schedule Parser ──────────────────────────────────────────────
+// Reads: Column B (idx 1) = Login ID, Column C (idx 2) = date/code, Column J (idx 9) = time
 function buildScheduleIndexByPosition(sheet) {
   if (!sheet) return { sumMap: new Map(), presenceSet: new Set() };
 
-  const COL_LOGIN = 1;
-  const COL_DATE  = 2;
-  const COL_TIME  = 9;
+  const COL_LOGIN = 1;   // Column B
+  const COL_DATE  = 2;   // Column C
+  const COL_TIME  = 9;   // Column J
 
   const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: false });
   const sumMap      = new Map();
@@ -846,6 +850,7 @@ function buildScheduleIndexByPosition(sheet) {
     const colC = String(row[COL_DATE]  ?? '').trim();
     const colJ = String(row[COL_TIME]  ?? '').trim();
 
+    // A new agent block starts when column B holds a standalone 5–6-digit login
     if (colB) {
       const loginMatch = colB.match(/\b(\d{5,6})\b/);
       if (loginMatch) {
@@ -867,6 +872,7 @@ function buildScheduleIndexByPosition(sheet) {
         actSecs:    0
       };
     } else if (pendingDay && colJ) {
+      // Activity row under the current date – accumulate
       pendingDay.actSecs += parseSeconds(colJ);
     }
   }
@@ -875,17 +881,21 @@ function buildScheduleIndexByPosition(sheet) {
   return { sumMap, presenceSet };
 }
 
+// ─── Positional IR Counter ────────────────────────────────────────────────────
+// Counts rows where the value at `userColIndex` matches an agent's login ID.
 function buildIRCountIndexByColumnIndex(rows, userColIndex, dateAliases, dateColIndex) {
   const map = new Map();
   rows.forEach(row => {
     const vals = Object.values(row);
     const user = String(vals[userColIndex] ?? '').trim();
 
+    // Try named date column first, then positional fallback (column Z)
     let rawDate = findValue(row, dateAliases, '');
     if (!rawDate && dateColIndex !== undefined) {
       rawDate = String(vals[dateColIndex] ?? '').trim();
     }
 
+    // Strip time component from datetime strings like "9/1/2026 8:41:42 AM"
     const dateStr = String(rawDate ?? '').split(/\s+/)[0];
     const day = monthFirstDateKey(dateStr) || dateKey(dateStr) || dateKey(String(rawDate ?? ''));
 
@@ -913,16 +923,10 @@ function getEmptyStateColspan() {
 }
 
 function getPreferredDateGroups() {
-  const dates = new Set();
+  const utlDates = [...getDatesFromRows(sourceRows.utl, FIELD_ALIASES.utlDate)].sort();
+  if (utlDates.length) return utlDates;
 
-  // جمع التواريخ من جميع المصادر المتاحة لضمان عدم فشل العثور على تواريخ
-  getDatesFromRows(sourceRows.utl, FIELD_ALIASES.utlDate).forEach(d => dates.add(d));
-  getStructureDates(sourceRows.structure).forEach(d => dates.add(d));
-  getDatesFromRows(sourceRows.ir, FIELD_ALIASES.irDate).forEach(d => dates.add(d));
-  getDatesFromRows(sourceRows.comp, FIELD_ALIASES.compDate).forEach(d => dates.add(d));
-  getDatesFromRows(sourceRows.schedule, FIELD_ALIASES.scheduleDate).forEach(d => dates.add(d));
-
-  return [...dates].sort();
+  return [...getStructureDates(sourceRows.structure)].sort();
 }
 
 function collapseAllDateGroups() {
@@ -1029,9 +1033,11 @@ async function processData() {
     status.textContent = `جاري بناء الفهارس وتجهيز ${dateGroups.length} تاريخ...`;
     progress.style.width = '75%';
 
-    const IR_COL_X = 23;
-    const IR_COL_Y = 24;
-    const IR_COL_Z = 25;
+    // ── IR: assigned_to (col X=23) → Assigning Tkts  |  added_by (col Y=24) → TKT  |  added_on (col Z=25) → date
+    //        Both user fields contain TTS User values → look up by ttsUser in the matrix loop.
+    const IR_COL_X = 23; // Excel column X → assigned_to  → Assigning Tkts
+    const IR_COL_Y = 24; // Excel column Y → added_by     → TKT
+    const IR_COL_Z = 25; // Excel column Z → added_on     → date ("M/D/YYYY H:MM:SS AM/PM")
     const _irByPosX = buildIRCountIndexByColumnIndex(sourceRows.ir, IR_COL_X, FIELD_ALIASES.irDate, IR_COL_Z);
     const _irByPosY = buildIRCountIndexByColumnIndex(sourceRows.ir, IR_COL_Y, FIELD_ALIASES.irDate, IR_COL_Z);
     const irAssigningIndex = _irByPosX.size
@@ -1055,6 +1061,8 @@ async function processData() {
       FIELD_ALIASES.compDuration
     );
 
+    // ── Schedule: try column-position first (B=login, C=date, J=time),
+    //              fall back to header-name matching when no data is found.
     const _schedSheetName = _scheduleWorkbook
       ? getOrderedSheetNames(_scheduleWorkbook,
           ['schedule', 'scheduled time', 'scheduled time per agent', 'scheduled'])[0]
@@ -1086,10 +1094,16 @@ async function processData() {
       const days = {};
 
       dateGroups.forEach(day => {
+        // IR: both assigned_to and added_by store TTS User values → look up by ttsUser
         const assigning = getIndexedValue(irAssigningIndex, ttsUser, day);
         const tkt       = getIndexedValue(irTktIndex,       ttsUser, day);
+
+        // System = count of added_by tickets × factor (each ticket ≈ 90 seconds / 86400)
         const system = tkt * 0.00104166666666667;
-        const systemSeconds = Math.round(system * 86400);
+
+        // systemSeconds: convert System (Excel day fraction) → seconds for Loss Time calc
+        const systemSeconds = Math.round(system * 86400); // = tkt × 90
+
         const talkTime = getIndexedValue(talkTimeIndex, loginId, day);
 
         const scheduleSeconds = hasSchedule
@@ -1113,6 +1127,8 @@ async function processData() {
         const teleSchedule = teleScheduleBase * 0.9;
         const comp = getIndexedValue(compIndex, teleoptiId, day);
 
+        // Loss Time = Tele-SCH×90% − (System + Talk Time + Comp)
+        // teleSchedule already has ×0.9 applied; systemSeconds converts the ticket count to seconds
         const loss = String(statusValue).trim().toLowerCase() !== 'active'
           ? statusValue
           : formatTime(Math.max(0, teleSchedule - systemSeconds - talkTime - comp));
@@ -1267,13 +1283,9 @@ function renderMatrixTable(rows) {
     [
       row.teleoptiId,
       row.loginId,
-      row.perm,
       row.ttsUser,
-      row.bssUser,
-      row.group,
       row.agentName,
       row.status,
-      row.tlId,
       row.tlName
     ].forEach(value => {
       const td = document.createElement('td');
@@ -1401,13 +1413,9 @@ function buildExportRows(rows) {
     const result = {
       'Teleopti ID': row.teleoptiId,
       'Login ID': row.loginId,
-      'Perm': row.perm,
       'TTS User': row.ttsUser,
-      'BSS User': row.bssUser,
-      'Group': row.group,
       'Agent Name': row.agentName,
       'Status': row.status,
-      'TL ID': row.tlId,
       'TL Name': row.tlName
     };
 
