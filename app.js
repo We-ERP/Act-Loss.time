@@ -846,12 +846,15 @@ function buildScheduleIndexByPosition(sheet) {
     const colC = String(row[COL_DATE]  ?? '').trim();
     const colJ = String(row[COL_TIME]  ?? '').trim();
 
-    // A new agent block starts when column B holds a standalone 5–6-digit login
+    // A new agent block starts when column B holds a standalone 5–6-digit login.
+    // The Login ID is the rightmost such number in the cell (e.g. a leading
+    // Teleopti/record ID may appear before the agent name, with the real
+    // Login ID at the end: "156958 Hesham nabil mohamed ali 86466" → 86466).
     if (colB) {
-      const loginMatch = colB.match(/\b(\d{5,6})\b/);
-      if (loginMatch) {
+      const loginMatches = colB.match(/\b\d{5,6}\b/g);
+      if (loginMatches && loginMatches.length) {
         flushPending();
-        currentLogin = loginMatch[1];
+        currentLogin = loginMatches[loginMatches.length - 1];
       }
     }
 
