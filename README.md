@@ -24,20 +24,26 @@
 | التاريخ | `added_on` (عمود Z) بصيغة `M/D/YYYY h:mm:ss AM` |
 | System | `TKT × 0.00104166666666667` يوم = `TKT × 90 ثانية` |
 | Talk Time | UTL بالـ Login ID: `Hold + Other + AUXOUTOFFTIME + ACWOUTOFFTIME` |
-| Tele-SCH | مجموع Duration للأكواد المختارة من Schedule (أو إجمالي اليوم لو ماتحددش أكواد) |
+| Tele-SCH | مجموع Duration للأكواد المختارة × 90% (بيظهر بعد الخصم، مثلاً 8:00 ← 7:12) |
 | Comp | Compensation بالـ Teleopti ID: `Comp_Du` |
-| **Loss Time** | `Tele-SCH × 90% − (System + Talk Time + Comp)` ولا يقل عن صفر |
+| **Loss Time** | `Tele-SCH − (System + Talk Time + Comp)` ولا يقل عن صفر |
 
 غير النسبة أو ثواني التذكرة من `config.json` (`teleSchFactor`, `secondsPerTicket`).
 
-## Schedule (نفس منطق الماكرو)
-الملف الخام بيتقرأ بالمواقع: **B** = ID + الاسم (بداية بلوك الموظف) • **C** = التاريخ أو كود النشاط • **J** = Duration.
-بعد رفع الملف بتظهر الأكواد كأزرار، اختار اللي تتحسب في Tele-SCH (الاختيار بيتحفظ في المتصفح).
-عشان تثبّتها للجميع/للسيرفر حطها في `config.json`:
-```json
-{ "scheduleCodes": ["Phone", "Chat"] }
-```
-بيدعم كمان جدول مسطح فيه `Agent / Date / Scheduled time`.
+## Schedule
+بيتعرف تلقائيًا على شكلين:
+1. **شيت `Final` بعد الماكرو:** أعمدة `ID | Date | Duration | Agent Name | TL | Code`.
+2. **التقرير الخام (RD):** **B** = ID + الاسم • **C** = التاريخ أو كود النشاط • **J** = Duration.
+
+الأكواد المعتمدة (في `config.json`): `Covering E.C` • `Covering HSH instability` • `Covering PC Pro` • `Phone`.
+بعد رفع الملف بتظهر الأكواد كأزرار تقدر تغيّر الاختيار منها، والاختيار بيتحفظ في المتصفح.
+
+## التصدير
+زر Excel بيطلّع نفس شكل الشيت: الأعمدة الثابتة (Teleopti ID, Login ID, Agent Name, TTS User, TL Name, Status)، صف التواريخ المدموج، عناوين بنفسجي (Assigning Tkts برتقالي)، وLoss Time أخضر/أحمر.
+كل يوم 7 أعمدة في مجموعة Outline: اليوم المطوي في الصفحة بيظهر منه Loss Time بس، واليوم المفتوح بيظهر كامل.
+
+## تشخيص IR
+بعد المعالجة شريط الحالة بيعرض: عدد صفوف IR، كام صف `added_by` / `assigned_to` طابق TTS User، وكام تاريخ اتقرا ومداه. لو مفيش مطابقة بيعرض أمثلة من القيم.
 
 ## التشغيل
 - **المتصفح:** فعّل GitHub Pages وافتح الرابط. `STR Loss.xlsx` بيتحمّل تلقائيًا، وارفع باقي الشيتات واضغط "بدء المعالجة".

@@ -7,14 +7,15 @@
   data/UTL.xlsx            Hold + Other + AUX + ACW  (UL_lo / UL_Date)
   data/IR.xlsx             assigned_to / added_by / added_on
   data/Compensation.xlsx   Comp_ID / Comp_Da / Comp_Du
-  data/Schedule.xlsx       تقرير Scheduled Time per Agent الخام (B=ID, C=تاريخ/كود, J=Duration)
+  data/Schedule.xlsx       شيت Final بعد الماكرو (ID/Date/Duration/Code) أو التقرير الخام (B=ID, C=تاريخ/كود, J=Duration)
   config.json              teleSchFactor / secondsPerTicket / scheduleCodes
 
 المخرجات:
-  output/Final_Report.xlsx  (شيتين: Matrix و Daily_Long)
+  output/Final_Report.xlsx  (شيتين: Matrix بنفس شكل الإكسيل + Daily_Long)
 
 المعادلة:
-  Loss Time = Tele-SCH × 90% − (System + Talk Time + Comp)   (لا يقل عن صفر)
+  Tele-SCH  = مجموع الأكواد المختارة × 90%   (بيظهر بعد الخصم)
+  Loss Time = Tele-SCH − (System + Talk Time + Comp)   (لا يقل عن صفر)
   System    = TKT × 90 ثانية  (= 0.00104166666666667 يوم)
 """
 import json
@@ -25,6 +26,9 @@ from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
 import pandas as pd
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
@@ -203,10 +207,35 @@ def read_sheets(path, header=0):
     return pd.read_excel(path, sheet_name=None, header=header, dtype=object)
 
 
-def read_rows(stem, hints, validate=None):
+def rows_by_header(path, hints, groups):
+    """يدوّر على صف العناوين (أول 40 صف) اللي فيه كل المجموعات المطلوبة."""
+    sheets = read_sheets(path, header=None)
+    names = sorted(sheets, key=lambda n: 0 if any(h in norm(n) for h in hints) else 1)
+    for name in names:
+        df = sheets[name]
+        for i in range(min(len(df), 40)):
+            cells = [norm(c) for c in df.iloc[i].tolist()]
+            if all(any(norm(a) in cells for a in g) for g in groups):
+                headers, seen = [], {}
+                for j, h in enumerate(df.iloc[i].tolist()):
+                    base = text(h) or f"Column {j + 1}"
+                    n = seen.get(base, 0)
+                    seen[base] = n + 1
+                    headers.append(f"{base} {n + 1}" if n else base)
+                body = df.iloc[i + 1:].dropna(how="all")
+                body.columns = headers
+                return body.to_dict("records")
+    return None
+
+
+def read_rows(stem, hints, groups=None, validate=None):
     path = find_data_file(stem)
     if not path:
         return []
+    if groups:
+        found = rows_by_header(path, hints, groups)
+        if found:
+            return found
     sheets = read_sheets(path)
     names = sorted(sheets, key=lambda n: 0 if any(h in norm(n) for h in hints) else 1)
     for name in names:
@@ -256,6 +285,10 @@ def talk_index(rows):
     return idx
 
 
+def user_id(v):
+    return text(v).split("@")[0]
+
+
 def ir_indexes(rows):
     assigning, tkt = {}, {}
     if not rows:
@@ -268,9 +301,38 @@ def ir_indexes(rows):
         day = date_key(r.get(c_date))
         if not day:
             continue
-        add(assigning, r.get(c_assigned), day, 1)
-        add(tkt, r.get(c_added), day, 1)
+        add(assigning, user_id(r.get(c_assigned)), day, 1)
+        add(tkt, user_id(r.get(c_added)), day, 1)
     return assigning, tkt
+
+
+def parse_final_schedule(df):
+    """شيت Final بعد الماكرو: ID | Date | Duration | Agent Name | TL | Code"""
+    for i in range(min(len(df), 40)):
+        cells = [norm(c) for c in df.iloc[i].tolist()]
+        if not all(x in cells for x in ("id", "date", "duration")):
+            continue
+        c_id, c_date, c_dur = cells.index("id"), cells.index("date"), cells.index("duration")
+        c_code = cells.index("code") if "code" in cells else -1
+        index, days, code_totals = {}, set(), {}
+        for row in df.iloc[i + 1:].itertuples(index=False):
+            rid, day = text(row[c_id]), date_key(row[c_date])
+            if not rid or not day:
+                continue
+            secs = parse_seconds(row[c_dur])
+            e = index.setdefault(lookup_key(rid, day), {"total": 0, "has_total": False, "codes": {}})
+            days.add(day)
+            code = text(row[c_code]) if c_code >= 0 else ""
+            if not code:
+                e["total"] += secs
+                e["has_total"] = True
+            else:
+                lower = code.lower()
+                e["codes"][lower] = e["codes"].get(lower, 0) + secs
+                code_totals[lower] = code_totals.get(lower, 0) + secs
+        if index:
+            return index, days, code_totals
+    return None
 
 
 def parse_schedule():
@@ -281,6 +343,9 @@ def parse_schedule():
         return index, days, code_totals
 
     for _, df in read_sheets(path, header=None).items():
+        final = parse_final_schedule(df)
+        if final:
+            return final
         login, day = "", ""
         for row in df.itertuples(index=False):
             cells = [text(row[i]) if len(row) > i else "" for i in range(3)]
@@ -360,8 +425,8 @@ def build(structure, utl, ir, comp, sched_index, sched_days, codes, cfg):
         active = a["status"].lower() == "active"
 
         for day in days:
-            assigning = lookup_first(ir_assigning, [a["ttsUser"]], day)
-            tkt = lookup_first(ir_tkt, [a["ttsUser"]], day)
+            assigning = lookup_first(ir_assigning, [user_id(a["ttsUser"])], day)
+            tkt = lookup_first(ir_tkt, [user_id(a["ttsUser"])], day)
             system = round(tkt * cfg["secondsPerTicket"])
             talk_s = lookup_first(talk, [a["loginId"]], day)
             comp_s = lookup_first(comp_idx, [a["structureId"], a["loginId"]], day)
@@ -375,7 +440,8 @@ def build(structure, utl, ir, comp, sched_index, sched_days, codes, cfg):
             if sch is None:
                 sch = lookup_first(st_dur, [a["structureId"]], day)
 
-            loss = max(0, sch * cfg["teleSchFactor"] - (system + talk_s + comp_s))
+            sch = round(sch * cfg["teleSchFactor"])  # Tele-SCH بعد الـ 90%
+            loss = max(0, sch - (system + talk_s + comp_s))
             long_rows.append({
                 "Teleopti ID": a["structureId"], "Login ID": a["loginId"], "Perm": a["perm"],
                 "TTS User": a["ttsUser"], "BSS User": a["bssUser"], "Group": a["group"],
@@ -387,18 +453,73 @@ def build(structure, utl, ir, comp, sched_index, sched_days, codes, cfg):
     return days, long_rows
 
 
-def to_matrix(long_df):
-    fixed = ["Teleopti ID", "Login ID", "Perm", "TTS User", "BSS User", "Group",
-             "Agent Name", "Status", "TL ID", "TL Name"]
-    fixed = [c for c in fixed if c in long_df and (c in ("Teleopti ID", "Login ID", "TTS User", "Agent Name",
-                                                         "Status", "TL Name") or (long_df[c] != "").any())]
-    metrics = ["Assigning Tkts", "TKT", "System", "Talk Time", "Tele-SCH", "Comp", "Loss Time"]
-    wide = long_df.pivot_table(index=fixed, columns="Date", values=metrics, aggfunc="first")
-    wide = wide.swaplevel(0, 1, axis=1)
-    days = sorted(long_df["Date"].unique())
-    wide = wide.reindex(columns=pd.MultiIndex.from_product([days, metrics]))
-    wide.columns = [f"{datetime.strptime(d, '%Y-%m-%d').strftime('%d-%b')} - {m}" for d, m in wide.columns]
-    return wide.reset_index()
+EXPORT_FIXED = [("Teleopti ID", 12), ("Login ID", 11), ("Agent Name", 38), ("TTS User", 22), ("TL Name", 18), ("Status", 12)]
+METRICS = ["Assigning Tkts", "TKT", "System", "Talk Time", "Tele-SCH", "Comp", "Loss Time"]
+
+
+def write_matrix_sheet(ws, long_rows, days):
+    """نفس شكل الإكسيل: صف 3 تواريخ مدموجة، صف 4 عناوين، 7 أعمدة لكل يوم (Outline) واليوم الأول مفتوح."""
+    purple = PatternFill("solid", fgColor="7030A0")
+    orange = PatternFill("solid", fgColor="E46C0A")
+    green = PatternFill("solid", fgColor="C6EFCE")
+    red = PatternFill("solid", fgColor="FFC7CE")
+    thin = Side(style="thin", color="000000")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    center = Alignment(horizontal="center", vertical="center")
+    white_bold = Font(bold=True, color="FFFFFF")
+    n_fixed, n_met = len(EXPORT_FIXED), len(METRICS)
+    time_re = re.compile(r"^\d+:\d{2}:\d{2}$")
+
+    ws.sheet_properties.outlinePr.summaryRight = True
+    ws.freeze_panes = ws.cell(row=5, column=n_fixed + 1)
+
+    for i, (label, width) in enumerate(EXPORT_FIXED, start=1):
+        c = ws.cell(row=4, column=i, value=label)
+        c.font, c.fill, c.alignment, c.border = white_bold, purple, center, border
+        ws.column_dimensions[get_column_letter(i)].width = width
+
+    for d, day in enumerate(days):
+        start = n_fixed + d * n_met + 1
+        dt_ = datetime.strptime(day, "%Y-%m-%d")
+        ws.merge_cells(start_row=3, start_column=start, end_row=3, end_column=start + n_met - 1)
+        h = ws.cell(row=3, column=start, value=f"{dt_.day}-{dt_.strftime('%b')}")
+        h.font, h.alignment = Font(bold=True), center
+        for c in range(start, start + n_met):
+            ws.cell(row=3, column=c).border = border
+        for m, label in enumerate(METRICS):
+            c = ws.cell(row=4, column=start + m, value=label)
+            c.font, c.fill, c.alignment, c.border = white_bold, orange if m == 0 else purple, center, border
+            ws.column_dimensions[get_column_letter(start + m)].width = 14 if m == 0 else 11
+        ws.column_dimensions.group(get_column_letter(start), get_column_letter(start + n_met - 2),
+                                   outline_level=1, hidden=(d != 0))
+
+    def num(txt):
+        return parse_seconds(txt) / 86400
+
+    per_agent = len(days)
+    for r_i in range(0, len(long_rows), per_agent):
+        chunk = long_rows[r_i:r_i + per_agent]
+        row_no = 5 + r_i // per_agent
+        first = chunk[0]
+        for i, (label, _) in enumerate(EXPORT_FIXED, start=1):
+            v = first[label]
+            c = ws.cell(row=row_no, column=i, value=int(v) if re.fullmatch(r"\d+", str(v)) else v)
+            c.alignment, c.border = center, border
+        for d, item in enumerate(chunk):
+            start = n_fixed + d * n_met + 1
+            loss_is_time = bool(time_re.match(str(item["Loss Time"])))
+            vals = [item["Assigning Tkts"], item["TKT"], num(item["System"]), num(item["Talk Time"]),
+                    num(item["Tele-SCH"]), num(item["Comp"]),
+                    num(item["Loss Time"]) if loss_is_time else item["Loss Time"]]
+            for m, v in enumerate(vals):
+                c = ws.cell(row=row_no, column=start + m, value=v)
+                c.alignment, c.border = center, border
+                if m >= 2 and (m < n_met - 1 or loss_is_time):
+                    c.number_format = "[h]:mm:ss"
+                if m == n_met - 1:
+                    bad = loss_is_time and v > 0
+                    c.fill = red if bad else green
+                    c.font = Font(bold=True, color="9C0006" if bad else "006100")
 
 
 def process_pipeline():
@@ -408,9 +529,9 @@ def process_pipeline():
         print("⚠️  لا يوجد ملف Structure (STR Loss.xlsx) صالح - تم الإيقاف")
         return 0
 
-    utl = read_rows("UTL", ("utl", "log"))
-    ir = read_rows("IR", ("ir", "ticket"))
-    comp = read_rows("Compensation", ("comp",))
+    utl = read_rows("UTL", ("utl", "log"), [ALIASES["utlUser"], ALIASES["utlDate"]])
+    ir = read_rows("IR", ("ir", "ticket"), [ALIASES["irAssigned"] + ALIASES["irAdded"], ["added_on"]])
+    comp = read_rows("Compensation", ("comp",), [["Comp_ID", "Comp ID"], ["Comp_Du", "Comp Duration"]])
     sched_index, sched_days, code_totals = parse_schedule()
     codes = {str(c).strip().lower() for c in cfg.get("scheduleCodes", []) if str(c).strip()}
 
@@ -426,9 +547,14 @@ def process_pipeline():
 
     long_df = pd.DataFrame(long_rows).fillna("")
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
-    with pd.ExcelWriter(OUTPUT, engine="openpyxl") as writer:
-        to_matrix(long_df).to_excel(writer, sheet_name="Matrix", index=False)
-        long_df.to_excel(writer, sheet_name="Daily_Long", index=False)
+    wb = Workbook()
+    write_matrix_sheet(wb.active, long_df.to_dict("records"), days)
+    wb.active.title = "Matrix"
+    ws_long = wb.create_sheet("Daily_Long")
+    ws_long.append(list(long_df.columns))
+    for rec in long_df.itertuples(index=False):
+        ws_long.append(list(rec))
+    wb.save(OUTPUT)
     print(f"✅ تم حفظ التقرير في: {OUTPUT}  ({len(days)} يوم)")
     return 0
 

@@ -9,9 +9,9 @@
      التاريخ        = added_on (عمود Z)
      System         = TKT × 0.00104166666666667 يوم  (= TKT × 90 ثانية)
      Talk Time      = Hold + Other + AUX + ACW من UTL (بالـ Login ID)
-     Tele-SCH       = مجموع Duration للأكواد المختارة من Schedule
+     Tele-SCH       = مجموع Duration للأكواد المختارة من Schedule × 90%  (بيظهر بعد الخصم)
      Comp           = من Compensation
-     Loss Time      = Tele-SCH × 90%  −  (System + Talk Time + Comp)   (لا يقل عن صفر)
+     Loss Time      = Tele-SCH  −  (System + Talk Time + Comp)   (لا يقل عن صفر)
    ════════════════════════════════════════════════════════════════════════════ */
 
 const DEFAULT_CONFIG = {
@@ -194,11 +194,13 @@ function dateKey(value) {
   return '';
 }
 
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
 function displayDate(value) {
   if (!value) return '';
   const date = new Date(`${value}T00:00:00`);
   if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }).replace(' ', '-');
+  return `${MONTH_NAMES[date.getMonth()]}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
 function parseSeconds(value) {
@@ -262,16 +264,56 @@ function getOrderedSheetNames(workbook, words) {
   return [...hits, ...names.filter(n => !hits.includes(n))];
 }
 
+// يدوّر على صف العناوين (أول 40 صف) اللي فيه كل مجموعات الأعمدة المطلوبة
+function rowsByHeader(sheet, requiredGroups) {
+  const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: false, blankrows: false });
+  const limit = Math.min(matrix.length, 40);
+
+  for (let i = 0; i < limit; i += 1) {
+    const cells = matrix[i].map(normalise);
+    const ok = requiredGroups.every(group => group.some(alias => cells.includes(normalise(alias))));
+    if (!ok) continue;
+
+    const seen = new Map();
+    const headers = matrix[i].map((h, idx) => {
+      const base = String(h ?? '').trim() || `Column ${idx + 1}`;
+      const n = seen.get(base) || 0;
+      seen.set(base, n + 1);
+      return n ? `${base} ${n + 1}` : base;
+    });
+
+    return matrix.slice(i + 1)
+      .filter(row => row.some(v => String(v ?? '').trim() !== ''))
+      .map(row => Object.fromEntries(headers.map((h, idx) => [h, row[idx] ?? ''])));
+  }
+  return null;
+}
+
 // يرجّع صفوف أول شيت صالح (يفضّل الشيتات اللي اسمها قريب من hints)
 function chooseSheet(workbook, hints, options = {}) {
-  const { validate } = options;
-  for (const name of getOrderedSheetNames(workbook, hints)) {
+  const { validate, requiredGroups } = options;
+  const names = getOrderedSheetNames(workbook, hints);
+
+  if (requiredGroups) {
+    for (const name of names) {
+      const rows = rowsByHeader(workbook.Sheets[name], requiredGroups);
+      if (rows && rows.length) return rows;
+    }
+  }
+
+  for (const name of names) {
     const rows = XLSX.utils.sheet_to_json(workbook.Sheets[name], { defval: '', raw: false });
     if (!rows.length) continue;
     if (!validate || validate(rows)) return rows;
   }
   return [];
 }
+
+const HEADER_GROUPS = {
+  ir: [[...FIELD_ALIASES.irAssigned, ...FIELD_ALIASES.irAdded], ['added_on']],
+  utl: [FIELD_ALIASES.utlUser, FIELD_ALIASES.utlDate],
+  comp: [['Comp_ID', 'Comp ID'], ['Comp_Du', 'Comp Duration']]
+};
 
 function hasAgentNameColumn(rows) {
   return findKey(rows[0], FIELD_ALIASES.agentName) !== undefined;
@@ -293,7 +335,7 @@ async function ensureConfig() {
       if (typeof localStorage !== 'undefined') saved = JSON.parse(localStorage.getItem(CODES_STORAGE_KEY) || 'null');
     } catch (error) { saved = null; }
 
-    const initial = Array.isArray(saved) ? saved : CONFIG.scheduleCodes || [];
+    const initial = Array.isArray(saved) && saved.length ? saved : CONFIG.scheduleCodes || [];
     selectedCodes = new Set(initial.map(c => String(c).trim().toLowerCase()).filter(Boolean));
     return CONFIG;
   })();
@@ -340,6 +382,41 @@ function buildTalkTimeIndex(rows) {
 
 // IR: assigned_to (X) → Assigning | added_by (Y) → TKT | added_on (Z) → التاريخ
 // الأولوية لأسماء الأعمدة، ولو مش موجودة نرجع لمكان العمود X/Y/Z.
+function userId(value) {
+  return String(value ?? '').split('@')[0];
+}
+
+// تشخيص: هل مستخدمين IR بيطابقوا TTS User في الـ Structure؟ وهل التواريخ اتقرت؟
+function diagnoseIR(irRows, structureRows) {
+  const result = { rows: irRows.length, addedMatched: 0, assignedMatched: 0, datesRead: 0, unmatched: [], first: '', last: '' };
+  if (!irRows.length) return result;
+
+  const tts = new Set(structureRows.map(r => normalise(userId(findValue(r, FIELD_ALIASES.ttsUser)))).filter(Boolean));
+  const keys = Object.keys(irRows[0]);
+  const colAssigned = findKey(irRows[0], FIELD_ALIASES.irAssigned) ?? keys[IR_COL.assigned];
+  const colAdded = findKey(irRows[0], FIELD_ALIASES.irAdded) ?? keys[IR_COL.added];
+  const colDate = findKey(irRows[0], FIELD_ALIASES.irDate) ?? keys[IR_COL.date];
+  const unmatched = new Set();
+  const dates = [];
+
+  irRows.forEach(row => {
+    const a = normalise(userId(row[colAssigned]));
+    const b = normalise(userId(row[colAdded]));
+    if (a && tts.has(a)) result.assignedMatched += 1;
+    if (b && tts.has(b)) result.addedMatched += 1;
+    else if (b && unmatched.size < 5) unmatched.add(String(row[colAdded]));
+    const d = dateKey(row[colDate]);
+    if (d) { result.datesRead += 1; dates.push(d); }
+  });
+
+  dates.sort();
+  result.first = dates[0] || '';
+  result.last = dates[dates.length - 1] || '';
+  result.unmatched = [...unmatched];
+  result.columns = { assigned: colAssigned, added: colAdded, date: colDate };
+  return result;
+}
+
 function buildIRIndexes(rows) {
   const assigning = new Map();
   const tkt = new Map();
@@ -353,8 +430,8 @@ function buildIRIndexes(rows) {
   rows.forEach(row => {
     const day = dateKey(row[colDate]);
     if (!day) return;
-    addToIndex(assigning, row[colAssigned], day, 1);
-    addToIndex(tkt, row[colAdded], day, 1);
+    addToIndex(assigning, userId(row[colAssigned]), day, 1);
+    addToIndex(tkt, userId(row[colAdded]), day, 1);
   });
 
   return { assigning, tkt };
@@ -453,8 +530,57 @@ function parseFlatSchedule(rows) {
   return { index, days, codeTotals: new Map() };
 }
 
+// شيت Final بعد الماكرو: ID | Date | Duration | Agent Name | TL | Code
+function parseFinalScheduleMatrix(matrix) {
+  const limit = Math.min(matrix.length, 40);
+
+  for (let i = 0; i < limit; i += 1) {
+    const cells = matrix[i].map(normalise);
+    const col = name => cells.indexOf(normalise(name));
+    const idCol = col('ID');
+    const dateCol = col('Date');
+    const durCol = col('Duration');
+    const codeCol = col('Code');
+    if (idCol < 0 || dateCol < 0 || durCol < 0) continue;
+
+    const index = new Map();
+    const days = new Set();
+    const codeTotals = new Map();
+
+    matrix.slice(i + 1).forEach(row => {
+      const id = String(row[idCol] ?? '').trim();
+      const day = dateKey(row[dateCol]);
+      if (!id || !day) return;
+
+      const secs = parseSeconds(row[durCol]);
+      const key = makeLookupKey(id, day);
+      if (!index.has(key)) index.set(key, { total: 0, hasTotal: false, codes: new Map() });
+      const entry = index.get(key);
+      days.add(day);
+
+      const code = codeCol >= 0 ? String(row[codeCol] ?? '').trim() : '';
+      if (!code) {
+        entry.total += secs;
+        entry.hasTotal = true;
+        return;
+      }
+      const lower = code.toLowerCase();
+      entry.codes.set(lower, (entry.codes.get(lower) || 0) + secs);
+      const total = codeTotals.get(lower) || { label: code, secs: 0 };
+      total.secs += secs;
+      codeTotals.set(lower, total);
+    });
+
+    if (index.size) return { index, days, codeTotals };
+  }
+  return null;
+}
+
 function parseScheduleSheet(sheet) {
   const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: true });
+  const finalFormat = parseFinalScheduleMatrix(matrix);
+  if (finalFormat) return finalFormat;
+
   const positional = parseScheduleMatrix(matrix);
   if (positional.index.size) return positional;
 
@@ -626,8 +752,9 @@ function buildMatrix({ structureRows, utlRows, irRows, compRows, schedule, days,
       const perDay = {};
 
       days.forEach(day => {
-        const assigning = lookupFirst(ir.assigning, [agent.ttsUser], day);
-        const tkt = lookupFirst(ir.tkt, [agent.ttsUser], day);
+        const ttsKey = userId(agent.ttsUser);
+        const assigning = lookupFirst(ir.assigning, [ttsKey], day);
+        const tkt = lookupFirst(ir.tkt, [ttsKey], day);
         const systemSeconds = Math.round(tkt * cfg.secondsPerTicket);
         const talkSeconds = lookupFirst(talkIndex, [agent.loginId], day);
         const compSeconds = lookupFirst(compIndex, [agent.teleoptiId, agent.loginId], day);
@@ -639,17 +766,16 @@ function buildMatrix({ structureRows, utlRows, irRows, compRows, schedule, days,
         }
         const teleSchSeconds = scheduleSeconds ?? lookupFirst(structureDuration, [agent.teleoptiId], day);
 
-        const lossSeconds = Math.max(
-          0,
-          teleSchSeconds * cfg.teleSchFactor - (systemSeconds + talkSeconds + compSeconds)
-        );
+        // Tele-SCH بيظهر بعد خصم الـ 90% (7:12:00 بدل 8:00:00)
+        const teleSchAfterFactor = Math.round(teleSchSeconds * cfg.teleSchFactor);
+        const lossSeconds = Math.max(0, teleSchAfterFactor - (systemSeconds + talkSeconds + compSeconds));
 
         perDay[day] = {
           assigning,
           tkt,
           system: formatTime(systemSeconds),
           talkTime: formatTime(talkSeconds),
-          teleSch: formatTime(teleSchSeconds),
+          teleSch: formatTime(teleSchAfterFactor),
           comp: formatTime(compSeconds),
           lossTime: isActive ? formatTime(lossSeconds) : agent.status
         };
@@ -699,12 +825,13 @@ async function processData() {
     }
     progress.style.width = '35%';
 
-    const loadRows = async (file, hints) => (file ? chooseSheet(await readWorkbook(file), hints) : []);
-    sourceRows.utl = await loadRows(filesState.utl, ['utl', 'log']);
+    const loadRows = async (file, hints, groups) =>
+      (file ? chooseSheet(await readWorkbook(file), hints, { requiredGroups: groups }) : []);
+    sourceRows.utl = await loadRows(filesState.utl, ['utl', 'log'], HEADER_GROUPS.utl);
     progress.style.width = '50%';
-    sourceRows.ir = await loadRows(filesState.ir, ['ir', 'ticket']);
+    sourceRows.ir = await loadRows(filesState.ir, ['ir', 'ticket'], HEADER_GROUPS.ir);
     progress.style.width = '62%';
-    sourceRows.comp = await loadRows(filesState.comp, ['comp', 'compensation']);
+    sourceRows.comp = await loadRows(filesState.comp, ['comp', 'compensation'], HEADER_GROUPS.comp);
 
     dateGroups = getPreferredDateGroups(schedule);
     if (!dateGroups.length) throw new Error('لم يتم العثور على أي تاريخ داخل الشيتات');
@@ -725,9 +852,22 @@ async function processData() {
 
     collapseAllDateGroups();
     progress.style.width = '100%';
+
+    const diag = diagnoseIR(sourceRows.ir, sourceRows.structure);
+    if (sourceRows.ir.length) console.log('IR diagnostics', diag);
+
+    let irText = filesState.ir ? '' : ' • IR: لم يتم رفع الملف';
+    if (filesState.ir) {
+      irText = ` • IR ${diag.rows} صف (TKT مطابق ${diag.addedMatched} | Assigning مطابق ${diag.assignedMatched} | تواريخ ${diag.datesRead}/${diag.rows}`;
+      if (diag.first) irText += ` | ${diag.first} → ${diag.last}`;
+      irText += ')';
+      if (!diag.addedMatched && diag.unmatched.length) irText += ` ⚠ أمثلة added_by مش مطابقة: ${diag.unmatched.join(', ')}`;
+      if (diag.rows && !diag.datesRead) irText += ' ⚠ مفيش تاريخ اتقرا من added_on';
+    }
+
     status.textContent =
       `تم التحديث • ${processedMatrixData.length} موظف • ${dateGroups.length} يوم • ` +
-      `UTL ${sourceRows.utl.length} • IR ${sourceRows.ir.length} • Comp ${sourceRows.comp.length} • ` +
+      `UTL ${sourceRows.utl.length} • Comp ${sourceRows.comp.length}${irText} • ` +
       `Schedule: ${sourceLabels.schedule}` +
       (selectedCodes.size ? ` (${selectedCodes.size} كود)` : '');
 
@@ -897,11 +1037,36 @@ function filterData() {
   ));
 }
 
-/* ─── التصدير (كل الأيام، بغض النظر عن الطي) ───────────────────────────── */
+/* ─── التصدير ──────────────────────────────────────────────────────────── */
+// نفس شكل شيت الإكسيل: الأعمدة الثابتة ثم 7 أعمدة لكل يوم، واليوم المطوي بيفضل ظاهر منه Loss Time بس
+const EXPORT_FIXED = [
+  { key: 'teleoptiId', label: 'Teleopti ID', width: 12 },
+  { key: 'loginId', label: 'Login ID', width: 11 },
+  { key: 'agentName', label: 'Agent Name', width: 38 },
+  { key: 'ttsUser', label: 'TTS User', width: 22 },
+  { key: 'tlName', label: 'TL Name', width: 18 },
+  { key: 'status', label: 'Status', width: 12 }
+];
+const EXPORT_COLORS = {
+  purple: 'FF7030A0',
+  orange: 'FFE46C0A',
+  white: 'FFFFFFFF',
+  greenFill: 'FFC6EFCE',
+  greenText: 'FF006100',
+  redFill: 'FFFFC7CE',
+  redText: 'FF9C0006'
+};
+
+function shortDate(day) {
+  const d = new Date(`${day}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return day;
+  return `${d.getDate()}-${MONTH_NAMES[d.getMonth()]}`;
+}
+
 function buildExportRows(rows) {
   return rows.map(row => {
     const result = {};
-    activeColumns.forEach(col => { result[col.label] = row[col.key]; });
+    EXPORT_FIXED.forEach(col => { result[col.label] = row[col.key]; });
 
     dateGroups.forEach(day => {
       const v = row.days[day] || {};
@@ -918,29 +1083,133 @@ function buildExportRows(rows) {
   });
 }
 
-function currentExportRows() {
-  return buildExportRows(visibleMatrixData.length ? visibleMatrixData : processedMatrixData);
+function currentExportSource() {
+  return visibleMatrixData.length ? visibleMatrixData : processedMatrixData;
 }
 
-function exportToExcel() {
-  const exportRows = currentExportRows();
-  if (!exportRows.length) { alert('لا توجد بيانات للتصدير'); return; }
-
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(exportRows), 'Matrix_Report');
-  XLSX.writeFile(workbook, 'CallCenter_Daily_Performance_Report.xlsx');
-}
-
-function exportToCSV() {
-  const exportRows = currentExportRows();
-  if (!exportRows.length) { alert('لا توجد بيانات للتصدير'); return; }
-
-  const csv = XLSX.utils.sheet_to_csv(XLSX.utils.json_to_sheet(exportRows));
-  const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
+function downloadBlob(blob, fileName) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = 'CallCenter_Daily_Performance_Report.csv';
+  link.download = fileName;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+async function exportToExcel() {
+  const source = currentExportSource();
+  if (!source.length) { alert('لا توجد بيانات للتصدير'); return; }
+  if (typeof ExcelJS === 'undefined') { alert('مكتبة ExcelJS لم يتم تحميلها - تأكد من الاتصال بالإنترنت'); return; }
+
+  const thin = { style: 'thin', color: { argb: 'FF000000' } };
+  const border = { top: thin, left: thin, bottom: thin, right: thin };
+  const center = { horizontal: 'center', vertical: 'middle' };
+  const fixedCount = EXPORT_FIXED.length;
+  const metricCount = DAY_METRIC_LABELS.length;
+  const timeFormat = '[h]:mm:ss';
+
+  const workbook = new ExcelJS.Workbook();
+  const ws = workbook.addWorksheet('Matrix_Report', {
+    views: [{ state: 'frozen', xSplit: fixedCount, ySplit: 4 }],
+    properties: { outlineLevelCol: 1, outlineProperties: { summaryRight: true, summaryBelow: false } }
+  });
+
+  const styleHeader = (cell, fill) => {
+    cell.font = { bold: true, color: { argb: EXPORT_COLORS.white } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fill } };
+    cell.alignment = center;
+    cell.border = border;
+  };
+
+  EXPORT_FIXED.forEach((col, i) => {
+    ws.getColumn(i + 1).width = col.width;
+    const cell = ws.getCell(4, i + 1);
+    cell.value = col.label;
+    styleHeader(cell, EXPORT_COLORS.purple);
+  });
+
+  dateGroups.forEach((day, d) => {
+    const start = fixedCount + d * metricCount + 1;
+    ws.mergeCells(3, start, 3, start + metricCount - 1);
+    const dateCell = ws.getCell(3, start);
+    dateCell.value = shortDate(day);
+    dateCell.font = { bold: true };
+    dateCell.alignment = center;
+    for (let c = start; c < start + metricCount; c += 1) ws.getCell(3, c).border = border;
+
+    DAY_METRIC_LABELS.forEach((label, m) => {
+      const col = ws.getColumn(start + m);
+      col.width = m === 0 ? 14 : 11;
+      const cell = ws.getCell(4, start + m);
+      cell.value = label;
+      styleHeader(cell, m === 0 ? EXPORT_COLORS.orange : EXPORT_COLORS.purple);
+
+      // أول 6 أعمدة في اليوم = مجموعة (Outline) قابلة للطي، وLoss Time هو عمود الملخص
+      if (m < metricCount - 1) {
+        col.outlineLevel = 1;
+        col.hidden = Boolean(collapsedDays[day]);
+      }
+    });
+  });
+
+  const toDays = text => parseSeconds(text) / 86400;
+
+  source.forEach((row, r) => {
+    const rowIndex = 5 + r;
+
+    EXPORT_FIXED.forEach((col, i) => {
+      const cell = ws.getCell(rowIndex, i + 1);
+      const raw = row[col.key] ?? '';
+      cell.value = /^\d+$/.test(String(raw)) ? Number(raw) : raw;
+      cell.alignment = center;
+      cell.border = border;
+    });
+
+    dateGroups.forEach((day, d) => {
+      const v = row.days[day] || {};
+      const start = fixedCount + d * metricCount + 1;
+      const lossIsTime = /^\d+:\d{2}:\d{2}$/.test(String(v.lossTime ?? ''));
+      const values = [
+        v.assigning ?? 0,
+        v.tkt ?? 0,
+        toDays(v.system),
+        toDays(v.talkTime),
+        toDays(v.teleSch),
+        toDays(v.comp),
+        lossIsTime ? toDays(v.lossTime) : (v.lossTime ?? '')
+      ];
+
+      values.forEach((value, m) => {
+        const cell = ws.getCell(rowIndex, start + m);
+        cell.value = value;
+        cell.alignment = center;
+        cell.border = border;
+        if (m >= 2 && (m < metricCount - 1 || lossIsTime)) cell.numFmt = timeFormat;
+
+        if (m === metricCount - 1) {
+          const bad = lossIsTime && value > 0;
+          cell.font = { bold: true, color: { argb: bad ? EXPORT_COLORS.redText : EXPORT_COLORS.greenText } };
+          cell.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: bad ? EXPORT_COLORS.redFill : EXPORT_COLORS.greenFill }
+          };
+        }
+      });
+    });
+  });
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  downloadBlob(
+    new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+    'CallCenter_Daily_Performance_Report.xlsx'
+  );
+}
+
+function exportToCSV() {
+  const exportRows = buildExportRows(currentExportSource());
+  if (!exportRows.length) { alert('لا توجد بيانات للتصدير'); return; }
+
+  const csv = XLSX.utils.sheet_to_csv(XLSX.utils.json_to_sheet(exportRows));
+  downloadBlob(new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' }), 'CallCenter_Daily_Performance_Report.csv');
 }

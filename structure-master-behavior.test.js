@@ -92,6 +92,41 @@ function testScheduleCodes() {
   assert.strictEqual(run(sandbox, `scheduleSecondsFor(__entry, new Set(['phone','break 1']))`), 7 * 3600);
 }
 
+/* ── 3b) شيت Final بعد الماكرو + الأكواد ───────────────────────────────────── */
+function testFinalSchedule() {
+  const { sandbox } = createSandbox();
+  sandbox.__m = [
+    ['ID', 'Date', 'Duration', 'Agent Name', 'TL', 'Code'],
+    [73935, '9/1/2026', 0.25, 'A', 'T', 'Phone'],                       // 6:00:00
+    [73935, '9/1/2026', 1 / 24, 'A', 'T', 'Covering PC Pro'],           // 1:00:00
+    [73935, '9/1/2026', 1 / 48, 'A', 'T', 'Break']                      // 0:30:00 (غير مختار)
+  ];
+  const parsed = run(sandbox, 'parseFinalScheduleMatrix(__m)');
+  assert(parsed, 'Final-format schedule detected');
+  sandbox.__e = parsed.index.get('73935|2026-09-01');
+  assert(sandbox.__e, 'entry keyed by ID + date');
+  assert.strictEqual(
+    run(sandbox, `scheduleSecondsFor(__e, new Set(['phone', 'covering pc pro']))`),
+    7 * 3600,
+    'only the selected codes are summed'
+  );
+}
+
+/* ── 3c) تشخيص IR ───────────────────────────────────────────────────────── */
+function testDiagnoseIR() {
+  const { sandbox } = createSandbox();
+  sandbox.__ir = [
+    { assigned_to: 'Mostafa.M69994', added_by: 'Mostafa.M69994@co.com', added_on: '9/1/2026 8:41:42 AM' },
+    { assigned_to: 'nobody', added_by: 'nobody', added_on: 'bad' }
+  ];
+  sandbox.__st = [{ 'TTS User': 'Mostafa.M69994', 'Agent Name': 'A' }];
+  const d = plain(run(sandbox, 'diagnoseIR(__ir, __st)'));
+  assert.strictEqual(d.addedMatched, 1, 'email suffix is ignored');
+  assert.strictEqual(d.assignedMatched, 1);
+  assert.strictEqual(d.datesRead, 1);
+  assert.deepStrictEqual(d.unmatched, ['nobody']);
+}
+
 /* ── 4) المعادلة الكاملة ─────────────────────────────────────────────────── */
 function testLossFormula() {
   const { sandbox } = createSandbox();
@@ -116,9 +151,9 @@ function testLossFormula() {
   assert.strictEqual(d.tkt, 2);
   assert.strictEqual(d.system, '0:03:00', '2 tickets × 90s');
   assert.strictEqual(d.talkTime, '1:45:00');
-  assert.strictEqual(d.teleSch, '8:00:00');
+  assert.strictEqual(d.teleSch, '7:12:00', 'Tele-SCH is shown after the 90% factor');
   assert.strictEqual(d.comp, '0:15:00');
-  // 8:00:00 × 0.9 = 7:12:00 ; − (0:03:00 + 1:45:00 + 0:15:00) = 5:09:00
+  // Tele-SCH 7:12:00 − (0:03:00 + 1:45:00 + 0:15:00) = 5:09:00
   assert.strictEqual(d.lossTime, '5:09:00');
   assert.strictEqual(b.days['2026-09-01'].lossTime, 'Unpaid', 'non-active shows status');
   // 0.00104166666666667 day = 90 seconds
@@ -190,7 +225,7 @@ function testRenderAndExport() {
 
   const exportRows = plain(run(sandbox, 'buildExportRows(__rows)'));
   const keys = Object.keys(exportRows[0]);
-  assert.deepStrictEqual(keys.slice(0, 10), labels);
+  assert.deepStrictEqual(keys.slice(0, 6), ['Teleopti ID', 'Login ID', 'Agent Name', 'TTS User', 'TL Name', 'Status']);
   const l1 = run(sandbox, `displayDate('2026-09-01')`);
   const l2 = run(sandbox, `displayDate('2026-09-02')`);
   assert(keys.some(k => k.startsWith(`${l1} - `)) && keys.some(k => k.startsWith(`${l2} - `)),
@@ -204,6 +239,8 @@ function testRenderAndExport() {
   testDates();
   testColumnMatching();
   testScheduleCodes();
+  testFinalSchedule();
+  testDiagnoseIR();
   testLossFormula();
   await testProcessData();
   testRenderAndExport();

@@ -1,5 +1,5 @@
 {
   "teleSchFactor": 0.9,
   "secondsPerTicket": 90,
-  "scheduleCodes": []
+  "scheduleCodes": ["Covering E.C", "Covering HSH instability", "Covering PC Pro", "Phone"]
 }
