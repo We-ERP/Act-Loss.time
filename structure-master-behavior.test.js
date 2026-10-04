@@ -127,6 +127,57 @@ function testDiagnoseIR() {
   assert.deepStrictEqual(d.unmatched, ['nobody']);
 }
 
+
+/* ── 3d) Compensation بالـ User Name + Code Time ────────────────────────────── */
+function testCompensationByUser() {
+  const { sandbox } = createSandbox();
+  sandbox.__ctx = {
+    structureRows: [{ 'Teleopti ID': 68261, 'Login ID': 83957, 'Agent Name': 'M', 'TTS User': 'Mahmoud.a.aly', Status: 'Active', 'TL Name': 'T' }],
+    utlRows: [], irRows: [],
+    compRows: [
+      { ID: 68261, 'User Name ': 'Mahmoud.a.aly', TL: 'Atef Shoaib', Reason: 'INQ Task', Date: '9/1/2026', Shift: '9:00 AM - 6:00 PM', 'Code Time': '8:00:00' },
+      { ID: 68261, 'User Name ': 'Mahmoud.a.aly', TL: 'Atef Shoaib', Reason: 'x', Date: '9/1/2026', Shift: '', 'Code Time': '0:45:00' }
+    ],
+    schedule: { index: new Map([['68261|2026-09-01', { total: 32400, hasTotal: true, codes: new Map() }]]) },
+    days: ['2026-09-01'], codes: new Set(), config: {}
+  };
+  const [a] = plain(run(sandbox, 'buildMatrix(__ctx)'));
+  const d = a.days['2026-09-01'];
+  assert.strictEqual(d.comp, '8:45:00', 'two comp rows summed by user + date');
+  assert.strictEqual(d.teleSch, '8:06:00');
+  assert.strictEqual(d.lossTime, '0:00:00', 'comp bigger than Tele-SCH → clamped to zero');
+}
+
+/* ── 3e) Schedule الخام بنفس شكل Teleopti ────────────────────────────────────── */
+function testRawTeleoptiSchedule() {
+  const { sandbox } = createSandbox();
+  const pad = (cells) => { const r = Array(11).fill(''); Object.entries(cells).forEach(([i, v]) => { r[i] = v; }); return r; };
+  sandbox.__m = [
+    pad({ 1: 'Scheduled Time per Agent', 10: '9/20/2026 12:42:44 PM' }),
+    pad({ 1: 'Date:', 3: '9/1/2026 – 9/19/2026' }),
+    pad({ 4: 'Contract time (hh:mm)', 5: 'Work time (hh:mm)', 9: 'Scheduled time (hh:mm)' }),
+    pad({ 1: 'Totals:', 4: '16793:00', 9: '16793:00' }),
+    pad({ 1: 'TEData Welcome Call-New Profile 1', 4: '120:00', 9: '120:00' }),
+    pad({ 1: '156958 Hesham nabil mohamed ali 86466', 4: '120:00', 9: '120:00' }),
+    pad({ 2: 'Tuesday, September 01, 2026', 9: '8:00' }),
+    pad({ 3: 'Phone', 9: '6:00' }),
+    pad({ 3: 'Covering PC Pro', 9: '1:00' }),
+    pad({ 3: 'Lunch', 9: '1:00' }),
+    pad({ 1: 'TEData Welcome Call-New Profile 2', 4: '60:00', 9: '60:00' }),
+    pad({ 1: '200410 Another Agent 1234', 4: '8:00', 9: '8:00' }),
+    pad({ 2: '9/2/2026', 9: '8:00' }),
+    pad({ 2: 'Phone', 9: '8:00' })
+  ];
+  const parsed = run(sandbox, 'parseScheduleMatrix(__m)');
+  const e1 = parsed.index.get('156958|2026-09-01');
+  assert(e1, 'agent 156958 / 1 Sep found (date written as text with weekday)');
+  assert.strictEqual(e1.codes.get('phone'), 6 * 3600);
+  assert.strictEqual(e1.codes.get('covering pc pro'), 3600);
+  assert(!parsed.codeTotals.has('teData welcome call-new profile 2'.toLowerCase()), 'team rows are never codes');
+  assert.strictEqual(parsed.codeTotals.size, 3, 'Phone, Covering PC Pro, Lunch only');
+  assert(parsed.index.get('200410|2026-09-02'), 'second agent parsed after team row');
+}
+
 /* ── 4) المعادلة الكاملة ─────────────────────────────────────────────────── */
 function testLossFormula() {
   const { sandbox } = createSandbox();
@@ -241,6 +292,8 @@ function testRenderAndExport() {
   testScheduleCodes();
   testFinalSchedule();
   testDiagnoseIR();
+  testCompensationByUser();
+  testRawTeleoptiSchedule();
   testLossFormula();
   await testProcessData();
   testRenderAndExport();

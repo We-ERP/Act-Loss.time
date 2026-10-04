@@ -63,9 +63,10 @@ const FIELD_ALIASES = {
   irDate: ['added_on', 'Date'],
   utlUser: ['UL_lo', 'Login ID', 'Login'],
   utlDate: ['UL_Date', 'Date'],
-  compId: ['Comp_ID', 'Comp ID', 'Teleopti ID', 'ST_ID'],
-  compDate: ['Comp_Da', 'Date'],
-  compDuration: ['Comp_Du', 'Comp Duration', 'Duration'],
+  compUser: ['User Name', 'Username', 'Comp_User', 'TTS User'],
+  compId: ['ID', 'Comp_ID', 'Comp ID', 'Teleopti ID', 'ST_ID'],
+  compDate: ['Date', 'Comp_Da'],
+  compDuration: ['Code Time', 'Comp_Du', 'Comp Duration'],
   scheduleAgent: ['Agent', 'Agent Name', 'Employee', 'Employee Name'],
   scheduleDate: ['Date', 'Scheduled Date'],
   scheduleDuration: ['Scheduled time', 'Scheduled Time', 'Scheduled-Time', 'Scheduled_Time']
@@ -191,6 +192,16 @@ function dateKey(value) {
     return formatDateParts(year, month, +m[1]);
   }
 
+  // تواريخ جوه نص (مثلاً "Tue 9/1/2026" أو "Tuesday, September 01, 2026")
+  m = text.match(/\b(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})\b/);
+  if (m) return dateKey(`${m[1]}/${m[2]}/${m[3]}`);
+
+  const monthPattern = '(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|Sept?(?:ember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)';
+  m = text.match(new RegExp(`\\b${monthPattern}\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?,?\\s+(\\d{4})\\b`, 'i'));
+  if (m) return formatDateParts(+m[3], MONTHS[m[1].slice(0, 3).toLowerCase()], +m[2]);
+  m = text.match(new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+${monthPattern}\\.?,?\\s+(\\d{4})\\b`, 'i'));
+  if (m) return formatDateParts(+m[3], MONTHS[m[2].slice(0, 3).toLowerCase()], +m[1]);
+
   return '';
 }
 
@@ -312,7 +323,7 @@ function chooseSheet(workbook, hints, options = {}) {
 const HEADER_GROUPS = {
   ir: [[...FIELD_ALIASES.irAssigned, ...FIELD_ALIASES.irAdded], ['added_on']],
   utl: [FIELD_ALIASES.utlUser, FIELD_ALIASES.utlDate],
-  comp: [['Comp_ID', 'Comp ID'], ['Comp_Du', 'Comp Duration']]
+  comp: [[...FIELD_ALIASES.compUser, ...FIELD_ALIASES.compId], FIELD_ALIASES.compDuration]
 };
 
 function hasAgentNameColumn(rows) {
@@ -446,12 +457,27 @@ function lookupFirst(map, candidates, day) {
 }
 
 /* ─── Schedule ─────────────────────────────────────────────────────────── */
+// يحدد عمود Scheduled time وأعمدة العناوين (Label) من صف عناوين التقرير الخام
+function detectScheduleLayout(matrix) {
+  for (const row of matrix.slice(0, 80)) {
+    const cells = row.map(normalise);
+    const duration = cells.findIndex(c => /^scheduledtime(hhmm)?$/.test(c)); // مش عنوان التقرير 'Scheduled Time per Agent'
+    if (duration < 0) continue;
+    const firstValue = cells.findIndex(c => /^(contracttime|worktime|paidtime)/.test(c));
+    return { duration, labelEnd: firstValue > 2 ? firstValue : Math.min(duration, 4) };
+  }
+  return { duration: SCHEDULE_COL.duration, labelEnd: 4 };
+}
+
 // يقرأ التقرير الخام (RD) بنفس منطق الماكرو:
-//   B = "ID + اسم" يبدأ بلوك موظف | C = تاريخ (صف يوم) أو كود النشاط | J = Duration
+//   B = "ID + اسم" يبدأ بلوك موظف (أي نص تاني في B = فريق/إجمالي → بنفصل البلوك)
+//   C = تاريخ (صف يوم) أو كود نشاط | Scheduled time = Duration
 function parseScheduleMatrix(matrix) {
   const index = new Map();
   const days = new Set();
   const codeTotals = new Map();
+  const agents = new Set();
+  const layout = detectScheduleLayout(matrix);
   let login = '';
   let day = '';
 
@@ -462,25 +488,32 @@ function parseScheduleMatrix(matrix) {
   };
 
   for (const row of matrix) {
-    const cells = [0, 1, 2].map(i => String(row[i] ?? '').trim());
+    const first3 = [0, 1, 2].map(i => String(row[i] ?? '').trim());
 
-    if (cells.some(c => c && TOTALS_WORDS.some(w => normalise(c) === normalise(w)))) {
+    if (first3.some(c => c && TOTALS_WORDS.some(w => normalise(c) === normalise(w)))) {
       login = '';
       day = '';
       continue;
     }
 
-    const idMatch = cells[1].match(/\b(\d{5,6})\b/);
-    if (idMatch) {
-      login = idMatch[1];
+    if (first3[1]) {
+      const idMatch = first3[1].match(/\b(\d{5,6})\b/);
+      login = idMatch ? idMatch[1] : '';
       day = '';
+      if (login) agents.add(login);
     }
 
-    if (!login || cells[2] === '') continue;
+    let label = '';
+    let labelValue = '';
+    for (let i = 2; i < layout.labelEnd; i += 1) {
+      const text = String(row[i] ?? '').trim();
+      if (text) { label = text; labelValue = row[i]; break; }
+    }
+    if (!login || !label) continue;
 
-    const rawTime = row[SCHEDULE_COL.duration];
+    const rawTime = row[layout.duration];
     const hasTime = String(rawTime ?? '').trim() !== '';
-    const d = dateKey(row[SCHEDULE_COL.dateOrCode]);
+    const d = dateKey(labelValue);
 
     if (d) {
       day = d;
@@ -498,16 +531,16 @@ function parseScheduleMatrix(matrix) {
     const secs = parseSeconds(rawTime);
     if (!secs) continue;
 
-    const lower = cells[2].toLowerCase();
+    const lower = label.toLowerCase();
     const entry = entryFor(login, day);
     entry.codes.set(lower, (entry.codes.get(lower) || 0) + secs);
 
-    const total = codeTotals.get(lower) || { label: cells[2], secs: 0 };
+    const total = codeTotals.get(lower) || { label, secs: 0 };
     total.secs += secs;
     codeTotals.set(lower, total);
   }
 
-  return { index, days, codeTotals };
+  return { index, days, codeTotals, agents };
 }
 
 // جدول مسطح: Agent / Date / Scheduled time
@@ -612,8 +645,8 @@ async function prepareSchedule(file) {
     scheduleCodeTotals = parsed.codeTotals;
     renderCodeChips();
     status.textContent = parsed.index.size
-      ? `تم قراءة Schedule • ${scheduleCodeTotals.size} كود • اختار الأكواد اللي تتحسب في Tele-SCH`
-      : 'تعذر قراءة Schedule - راجع شكل الملف';
+      ? `تم قراءة Schedule • ${parsed.agents ? parsed.agents.size + ' موظف • ' : ''}${parsed.days.size} يوم • ${scheduleCodeTotals.size} كود • اختار الأكواد اللي تتحسب في Tele-SCH`
+      : 'تعذر قراءة Schedule - مفيش صفوف موظفين (ID من 5-6 أرقام في عمود B) ولا أعمدة ID/Date/Duration';
   } catch (error) {
     console.error(error);
     status.textContent = 'تعذر قراءة Schedule';
@@ -727,7 +760,11 @@ function buildMatrix({ structureRows, utlRows, irRows, compRows, schedule, days,
   const structureDuration = buildSumIndex(
     structureRows, FIELD_ALIASES.structureId, FIELD_ALIASES.structureDate, FIELD_ALIASES.structureDuration
   );
-  const compIndex = buildSumIndex(
+  // Compensation بيتربط بـ User Name (= TTS User) أولاً، وبعدين بالـ ID (= Teleopti ID)
+  const compByUser = buildSumIndex(
+    compRows, FIELD_ALIASES.compUser, FIELD_ALIASES.compDate, FIELD_ALIASES.compDuration
+  );
+  const compById = buildSumIndex(
     compRows, FIELD_ALIASES.compId, FIELD_ALIASES.compDate, FIELD_ALIASES.compDuration
   );
   const scheduleIndex = schedule?.index || new Map();
@@ -757,7 +794,10 @@ function buildMatrix({ structureRows, utlRows, irRows, compRows, schedule, days,
         const tkt = lookupFirst(ir.tkt, [ttsKey], day);
         const systemSeconds = Math.round(tkt * cfg.secondsPerTicket);
         const talkSeconds = lookupFirst(talkIndex, [agent.loginId], day);
-        const compSeconds = lookupFirst(compIndex, [agent.teleoptiId, agent.loginId], day);
+        const compKey = makeLookupKey(ttsKey, day);
+        const compSeconds = compKey && compByUser.has(compKey)
+          ? compByUser.get(compKey)
+          : lookupFirst(compById, [agent.teleoptiId], day);
 
         let scheduleSeconds = null;
         for (const candidate of scheduleCandidates) {
@@ -865,10 +905,13 @@ async function processData() {
       if (diag.rows && !diag.datesRead) irText += ' ⚠ مفيش تاريخ اتقرا من added_on';
     }
 
+    if (diag.last && collapsedDays[diag.last] !== undefined) collapsedDays[diag.last] = false; // نفتح آخر يوم فيه IR
+    const scheduleText = schedule ? `${schedule.index.size} يوم-موظف` : sourceLabels.schedule;
+
     status.textContent =
       `تم التحديث • ${processedMatrixData.length} موظف • ${dateGroups.length} يوم • ` +
       `UTL ${sourceRows.utl.length} • Comp ${sourceRows.comp.length}${irText} • ` +
-      `Schedule: ${sourceLabels.schedule}` +
+      `Schedule: ${scheduleText}` +
       (selectedCodes.size ? ` (${selectedCodes.size} كود)` : '');
 
     buildGroupToggles();

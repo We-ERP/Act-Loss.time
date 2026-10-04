@@ -55,9 +55,10 @@ ALIASES = {
     "irDate": ["added_on", "Date"],
     "utlUser": ["UL_lo", "Login ID", "Login"],
     "utlDate": ["UL_Date", "Date"],
-    "compId": ["Comp_ID", "Comp ID", "Teleopti ID", "ST_ID"],
-    "compDate": ["Comp_Da", "Date"],
-    "compDuration": ["Comp_Du", "Comp Duration", "Duration"],
+    "compUser": ["User Name", "Username", "Comp_User", "TTS User"],
+    "compId": ["ID", "Comp_ID", "Comp ID", "Teleopti ID", "ST_ID"],
+    "compDate": ["Date", "Comp_Da"],
+    "compDuration": ["Code Time", "Comp_Du", "Comp Duration"],
 }
 IR_COL = {"assigned": 23, "added": 24, "date": 25}  # X, Y, Z (احتياطي)
 SCHEDULE_COL = {"id": 1, "date_or_code": 2, "duration": 9}  # B, C, J
@@ -170,6 +171,16 @@ def date_key(v, default_year=None):
         y = int(m[3]) if m[3] else (default_year or datetime.now().year)
         y = y + 2000 if y < 100 else y
         return f"{y:04d}-{month:02d}-{int(m[1]):02d}"
+    m = re.search(r"\b(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{4})\b", s)
+    if m:
+        return date_key(f"{m[1]}/{m[2]}/{m[3]}")
+    mon = r"(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|Sept?(?:ember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
+    m = re.search(rf"\b{mon}\.?\s+(\d{{1,2}})(?:st|nd|rd|th)?,?\s+(\d{{4}})\b", s, re.I)
+    if m:
+        return f"{int(m[3]):04d}-{MONTHS[m[1][:3].lower()]:02d}-{int(m[2]):02d}"
+    m = re.search(rf"\b(\d{{1,2}})(?:st|nd|rd|th)?\s+{mon}\.?,?\s+(\d{{4}})\b", s, re.I)
+    if m:
+        return f"{int(m[3]):04d}-{MONTHS[m[2][:3].lower()]:02d}-{int(m[1]):02d}"
     return ""
 
 
@@ -346,21 +357,35 @@ def parse_schedule():
         final = parse_final_schedule(df)
         if final:
             return final
+
+        # التقرير الخام: نحدد عمود Scheduled time وأعمدة العناوين من صف العناوين
+        duration_col, label_end = SCHEDULE_COL["duration"], 4
+        rows = df.values.tolist()
+        for row in rows[:80]:
+            cells = [norm(c) for c in row]
+            hit = [i for i, c in enumerate(cells) if re.fullmatch(r"scheduledtime(hhmm)?", c)]
+            if hit:
+                duration_col = hit[0]
+                first_val = [i for i, c in enumerate(cells) if re.match(r"(contracttime|worktime|paidtime)", c)]
+                label_end = first_val[0] if first_val and first_val[0] > 2 else min(duration_col, 4)
+                break
+
         login, day = "", ""
-        for row in df.itertuples(index=False):
-            cells = [text(row[i]) if len(row) > i else "" for i in range(3)]
-            if any(c and norm(c) in {norm(w) for w in TOTALS_WORDS} for c in cells):
+        for row in rows:
+            row = list(row) + [None] * (duration_col + 1 - len(row)) if len(row) <= duration_col else row
+            first3 = [text(row[i]) for i in range(3)]
+            if any(c and norm(c) in {norm(w) for w in TOTALS_WORDS} for c in first3):
                 login, day = "", ""
                 continue
-            m = re.search(r"\b(\d{5,6})\b", cells[1])
-            if m:
-                login, day = m.group(1), ""
-            if not login or cells[2] == "":
+            if first3[1]:
+                m = re.search(r"\b(\d{5,6})\b", first3[1])
+                login, day = (m.group(1) if m else ""), ""
+            label = next((row[i] for i in range(2, label_end) if text(row[i])), None)
+            if not login or label is None:
                 continue
-
-            raw = row[SCHEDULE_COL["duration"]] if len(row) > SCHEDULE_COL["duration"] else None
+            raw = row[duration_col]
             has_time = not is_blank(raw) and str(raw).strip() != ""
-            d = date_key(row[SCHEDULE_COL["date_or_code"]])
+            d = date_key(label)
             if d:
                 day = d
                 days.add(d)
@@ -374,7 +399,7 @@ def parse_schedule():
             secs = parse_seconds(raw)
             if not secs:
                 continue
-            lower = cells[2].lower()
+            lower = text(label).lower()
             e = index.setdefault(lookup_key(login, day), {"total": 0, "has_total": False, "codes": {}})
             e["codes"][lower] = e["codes"].get(lower, 0) + secs
             code_totals[lower] = code_totals.get(lower, 0) + secs
@@ -413,7 +438,8 @@ def build(structure, utl, ir, comp, sched_index, sched_days, codes, cfg):
     ir_assigning, ir_tkt = ir_indexes(ir)
     talk = talk_index(utl)
     st_dur = sum_index(structure, "structureId", "structureDate", "structureDuration")
-    comp_idx = sum_index(comp, "compId", "compDate", "compDuration")
+    comp_by_user = sum_index(comp, "compUser", "compDate", "compDuration")
+    comp_by_id = sum_index(comp, "compId", "compDate", "compDuration")
 
     long_rows = []
     for r in structure:
@@ -429,7 +455,8 @@ def build(structure, utl, ir, comp, sched_index, sched_days, codes, cfg):
             tkt = lookup_first(ir_tkt, [user_id(a["ttsUser"])], day)
             system = round(tkt * cfg["secondsPerTicket"])
             talk_s = lookup_first(talk, [a["loginId"]], day)
-            comp_s = lookup_first(comp_idx, [a["structureId"], a["loginId"]], day)
+            ck = lookup_key(user_id(a["ttsUser"]), day)
+            comp_s = comp_by_user[ck] if ck and ck in comp_by_user else lookup_first(comp_by_id, [a["structureId"]], day)
 
             sch = None
             for cand in (a["structureId"], a["loginId"], a["agentName"]):
@@ -531,7 +558,7 @@ def process_pipeline():
 
     utl = read_rows("UTL", ("utl", "log"), [ALIASES["utlUser"], ALIASES["utlDate"]])
     ir = read_rows("IR", ("ir", "ticket"), [ALIASES["irAssigned"] + ALIASES["irAdded"], ["added_on"]])
-    comp = read_rows("Compensation", ("comp",), [["Comp_ID", "Comp ID"], ["Comp_Du", "Comp Duration"]])
+    comp = read_rows("Compensation", ("comp",), [ALIASES["compUser"] + ALIASES["compId"], ALIASES["compDuration"]])
     sched_index, sched_days, code_totals = parse_schedule()
     codes = {str(c).strip().lower() for c in cfg.get("scheduleCodes", []) if str(c).strip()}
 
