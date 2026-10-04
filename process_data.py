@@ -152,6 +152,8 @@ def date_key(v, default_year=None):
             return (datetime(1899, 12, 30) + timedelta(days=float(v))).date().isoformat()
         return ""
     s = str(v).strip()
+    if re.fullmatch(r"\d{5}(?:\.\d+)?", s):
+        return date_key(float(s))
     m = re.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T\s].*)?$", s)
     if m:
         return f"{int(m[1]):04d}-{int(m[2]):02d}-{int(m[3]):02d}"
@@ -163,7 +165,7 @@ def date_key(v, default_year=None):
         if not (1 <= month <= 12 and 1 <= day <= 31):
             return ""
         return f"{y:04d}-{month:02d}-{day:02d}"
-    m = re.match(r"^(\d{1,2})[\s\-/]([A-Za-z]{3})[A-Za-z]*(?:[\s\-/,]+(\d{2,4}))?$", s)
+    m = re.match(r"^(\d{1,2})[\s\-/]([A-Za-z]{3})[A-Za-z]*(?:[\s\-/,]+(\d{2,4}))?(?:\s.*)?$", s)
     if m:
         month = MONTHS.get(m[2].lower())
         if not month:
@@ -367,29 +369,36 @@ def parse_schedule():
             if hit:
                 duration_col = hit[0]
                 first_val = [i for i, c in enumerate(cells) if re.match(r"(contracttime|worktime|paidtime)", c)]
-                label_end = first_val[0] if first_val and first_val[0] > 2 else min(duration_col, 4)
+                label_end = first_val[0] if first_val and first_val[0] > 1 else min(duration_col, 4)
                 break
 
-        login, day = "", ""
+        login, day, agent_depth = "", "", -1
         for row in rows:
-            row = list(row) + [None] * (duration_col + 1 - len(row)) if len(row) <= duration_col else row
-            first3 = [text(row[i]) for i in range(3)]
-            if any(c and norm(c) in {norm(w) for w in TOTALS_WORDS} for c in first3):
-                login, day = "", ""
+            row = list(row) + [None] * max(0, duration_col + 1 - len(row))
+            depth, label = -1, None
+            for i in range(label_end):
+                if text(row[i]):
+                    depth, label = i, row[i]
+                    break
+            if depth < 0:
                 continue
-            if first3[1]:
-                m = re.search(r"\b(\d{5,6})\b", first3[1])
-                login, day = (m.group(1) if m else ""), ""
-            label = next((row[i] for i in range(2, label_end) if text(row[i])), None)
-            if not login or label is None:
+            if norm(label) in {norm(w) for w in TOTALS_WORDS}:
+                login, day, agent_depth = "", "", -1
+                continue
+            label_day = date_key(label)
+            m = None if label_day else re.search(r"\b(\d{5,6})\b", text(label))
+            if m:  # صف موظف
+                login, agent_depth, day = m.group(1), depth, ""
+                continue
+            if not login or depth <= agent_depth:  # فريق/عنوان
+                login, day, agent_depth = "", "", -1
                 continue
             raw = row[duration_col]
             has_time = not is_blank(raw) and str(raw).strip() != ""
-            d = date_key(label)
-            if d:
-                day = d
-                days.add(d)
-                e = index.setdefault(lookup_key(login, d), {"total": 0, "has_total": False, "codes": {}})
+            if label_day:
+                day = label_day
+                days.add(label_day)
+                e = index.setdefault(lookup_key(login, label_day), {"total": 0, "has_total": False, "codes": {}})
                 if has_time:
                     e["total"] += parse_seconds(raw)
                     e["has_total"] = True
@@ -467,6 +476,8 @@ def build(structure, utl, ir, comp, sched_index, sched_days, codes, cfg):
             if sch is None:
                 sch = lookup_first(st_dur, [a["structureId"]], day)
 
+            if sched_index and sch == 0:
+                assigning = 0  # IF(Tele-SCH=0, 0, COUNTIFS(...))
             sch = round(sch * cfg["teleSchFactor"])  # Tele-SCH بعد الـ 90%
             loss = max(0, sch - (system + talk_s + comp_s))
             long_rows.append({

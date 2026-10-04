@@ -178,6 +178,42 @@ function testRawTeleoptiSchedule() {
   assert(parsed.index.get('200410|2026-09-02'), 'second agent parsed after team row');
 }
 
+
+/* ── 3f) تواريخ IR كأرقام إكسيل + Schedule مزاح + شرط Assigning ────────────────── */
+function testSerialDatesAndShiftedSchedule() {
+  const { sandbox } = createSandbox();
+  const k = v => run(sandbox, `dateKey(${JSON.stringify(v)})`);
+  assert.strictEqual(k('46282.0736111'), '2026-09-17', 'serial as text');
+  assert.strictEqual(k(46282.5), '2026-09-17', 'serial as number');
+  assert.strictEqual(k('17-Sep-26 1:46 AM'), '2026-09-17', 'd-Mon-yy with time');
+
+  // نفس التقرير لكن مزاح عمود لليمين (لو الشيت بيبدأ من عمود تاني)
+  const pad = cells => { const r = Array(13).fill(''); Object.entries(cells).forEach(([i, v]) => { r[+i + 1] = v; }); return r; };
+  sandbox.__m = [
+    pad({ 4: 'Contract time (hh:mm)', 9: 'Scheduled time (hh:mm)' }),
+    pad({ 1: '156958 Hesham 86466', 9: '8:00' }),
+    pad({ 2: 46282, 9: '8:00' }),
+    pad({ 3: 'Phone', 9: '8:00' })
+  ];
+  const parsed = run(sandbox, 'parseScheduleMatrix(__m)');
+  assert(parsed.index.get('156958|2026-09-17'), 'works regardless of column offset');
+  assert.strictEqual(parsed.codeTotals.size, 1);
+}
+
+function testAssigningRule() {
+  const { sandbox } = createSandbox();
+  sandbox.__ctx = {
+    structureRows: [{ 'Teleopti ID': 1, 'Login ID': 2, 'Agent Name': 'A', 'TTS User': 'a.a', Status: 'Active', 'TL Name': 'T' }],
+    utlRows: [], compRows: [],
+    irRows: [{ assigned_to: 'a.a', added_by: 'x', added_on: '9/1/2026 8:00' }, { assigned_to: 'a.a', added_by: 'x', added_on: '9/2/2026 8:00' }],
+    schedule: { index: new Map([['1|2026-09-01', { total: 28800, hasTotal: true, codes: new Map() }]]) },
+    days: ['2026-09-01', '2026-09-02'], codes: new Set(), config: {}
+  };
+  const [a] = plain(run(sandbox, 'buildMatrix(__ctx)'));
+  assert.strictEqual(a.days['2026-09-01'].assigning, 1, 'scheduled day → counted');
+  assert.strictEqual(a.days['2026-09-02'].assigning, 0, 'no Tele-SCH → Assigning forced to 0 (IF(K5=0,0,...))');
+}
+
 /* ── 4) المعادلة الكاملة ─────────────────────────────────────────────────── */
 function testLossFormula() {
   const { sandbox } = createSandbox();
@@ -294,6 +330,8 @@ function testRenderAndExport() {
   testDiagnoseIR();
   testCompensationByUser();
   testRawTeleoptiSchedule();
+  testSerialDatesAndShiftedSchedule();
+  testAssigningRule();
   testLossFormula();
   await testProcessData();
   testRenderAndExport();

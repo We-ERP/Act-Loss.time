@@ -43,6 +43,7 @@ const sourceLabels = { structure: 'STR Loss.xlsx من المستودع', schedul
 
 let scheduleCache = { file: null, parsed: null };
 let scheduleCodeTotals = new Map(); // lower → { label, secs }
+let scheduleDebugText = '';
 let selectedCodes = new Set();       // lower-case codes
 
 const FIELD_ALIASES = {
@@ -151,21 +152,24 @@ function formatLocalDate(date) {
 
 // التواريخ عندك Month-First (9/1/2026 = 1 سبتمبر). لو الرقم الأول > 12 يتعامل معاه كيوم.
 // أي نص مش تاريخ صريح (زي "Break 1") بيرجع فاضي — مفيش new Date(text) عشان ميفهمش الأكواد كتواريخ.
+function serialToDateKey(serial) {
+  if (!(serial > 20000 && serial < 80000)) return '';
+  const d = new Date(Date.UTC(1899, 11, 30 + Math.floor(serial)));
+  return formatDateParts(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate());
+}
+
 function dateKey(value) {
   if (value === null || value === undefined || value === '') return '';
 
   if (value instanceof Date && !Number.isNaN(value.getTime())) return formatLocalDate(value);
 
-  if (typeof value === 'number') {
-    if (value > 20000 && value < 80000 && typeof XLSX !== 'undefined' && XLSX.SSF) {
-      const parsed = XLSX.SSF.parse_date_code(value);
-      if (parsed) return formatDateParts(parsed.y, parsed.m, parsed.d);
-    }
-    return '';
-  }
+  if (typeof value === 'number') return serialToDateKey(value);
 
   const text = String(value).trim();
   if (!text) return '';
+
+  // رقم تاريخ إكسيل (مثلاً 46277.0736) لما الخلية تتقري كنص
+  if (/^\d{5}(?:\.\d+)?$/.test(text)) return serialToDateKey(Number(text));
 
   let m = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T\s].*)?$/);
   if (m) return formatDateParts(+m[1], +m[2], +m[3]);
@@ -183,7 +187,7 @@ function dateKey(value) {
     return formatDateParts(year, month, day);
   }
 
-  m = text.match(/^(\d{1,2})[\s\-\/]([A-Za-z]{3})[A-Za-z]*(?:[\s\-\/,]+(\d{2,4}))?$/);
+  m = text.match(/^(\d{1,2})[\s\-\/]([A-Za-z]{3})[A-Za-z]*(?:[\s\-\/,]+(\d{2,4}))?(?:\s.*)?$/);
   if (m) {
     const month = MONTHS[m[2].toLowerCase()];
     if (!month) return '';
@@ -425,6 +429,7 @@ function diagnoseIR(irRows, structureRows) {
   result.last = dates[dates.length - 1] || '';
   result.unmatched = [...unmatched];
   result.columns = { assigned: colAssigned, added: colAdded, date: colDate };
+  result.sampleDate = `${String(irRows[0][colDate])} (${typeof irRows[0][colDate]}) • عمود: ${colDate}`;
   return result;
 }
 
@@ -464,7 +469,7 @@ function detectScheduleLayout(matrix) {
     const duration = cells.findIndex(c => /^scheduledtime(hhmm)?$/.test(c)); // مش عنوان التقرير 'Scheduled Time per Agent'
     if (duration < 0) continue;
     const firstValue = cells.findIndex(c => /^(contracttime|worktime|paidtime)/.test(c));
-    return { duration, labelEnd: firstValue > 2 ? firstValue : Math.min(duration, 4) };
+    return { duration, labelEnd: firstValue > 1 ? firstValue : Math.min(duration, 4) };
   }
   return { duration: SCHEDULE_COL.duration, labelEnd: 4 };
 }
@@ -480,6 +485,7 @@ function parseScheduleMatrix(matrix) {
   const layout = detectScheduleLayout(matrix);
   let login = '';
   let day = '';
+  let agentDepth = -1;
 
   const entryFor = (id, d) => {
     const key = makeLookupKey(id, d);
@@ -488,37 +494,48 @@ function parseScheduleMatrix(matrix) {
   };
 
   for (const row of matrix) {
-    const first3 = [0, 1, 2].map(i => String(row[i] ?? '').trim());
+    // أول خلية فيها نص في أعمدة العناوين = مستوى الصف (فريق / موظف / يوم / كود)
+    let depth = -1;
+    let label = '';
+    let labelValue = '';
+    for (let i = 0; i < layout.labelEnd; i += 1) {
+      const text = String(row[i] ?? '').trim();
+      if (text) { depth = i; label = text; labelValue = row[i]; break; }
+    }
+    if (depth < 0) continue;
 
-    if (first3.some(c => c && TOTALS_WORDS.some(w => normalise(c) === normalise(w)))) {
+    if (TOTALS_WORDS.some(w => normalise(label) === normalise(w))) {
       login = '';
       day = '';
+      agentDepth = -1;
       continue;
     }
 
-    if (first3[1]) {
-      const idMatch = first3[1].match(/\b(\d{5,6})\b/);
-      login = idMatch ? idMatch[1] : '';
+    const labelDay = dateKey(labelValue);
+    const idMatch = !labelDay && label.match(/\b(\d{5,6})\b/);
+
+    if (idMatch) {                       // صف موظف: "156958 Hesham ... 86466"
+      login = idMatch[1];
+      agentDepth = depth;
       day = '';
-      if (login) agents.add(login);
+      agents.add(login);
+      continue;
     }
 
-    let label = '';
-    let labelValue = '';
-    for (let i = 2; i < layout.labelEnd; i += 1) {
-      const text = String(row[i] ?? '').trim();
-      if (text) { label = text; labelValue = row[i]; break; }
+    if (!login || depth <= agentDepth) { // صف فريق أو عنوان → بنقفل بلوك الموظف
+      login = '';
+      day = '';
+      agentDepth = -1;
+      continue;
     }
-    if (!login || !label) continue;
 
     const rawTime = row[layout.duration];
     const hasTime = String(rawTime ?? '').trim() !== '';
-    const d = dateKey(labelValue);
 
-    if (d) {
-      day = d;
-      days.add(d);
-      const entry = entryFor(login, d);
+    if (labelDay) {
+      day = labelDay;
+      days.add(labelDay);
+      const entry = entryFor(login, labelDay);
       if (hasTime) {
         entry.total += parseSeconds(rawTime);
         entry.hasTotal = true;
@@ -626,7 +643,24 @@ async function loadSchedule(file) {
     const parsed = parseScheduleSheet(workbook.Sheets[name]);
     if (parsed.index.size) return parsed;
   }
-  return { index: new Map(), days: new Set(), codeTotals: new Map() };
+  return { index: new Map(), days: new Set(), codeTotals: new Map(), agents: new Set(), debug: describeSchedule(workbook) };
+}
+
+// لو الملف مش مفهوم: نعرض أول صفوف فيها نص عشان نعرف شكله
+function describeSchedule(workbook) {
+  try {
+    const name = workbook.SheetNames[0];
+    const matrix = XLSX.utils.sheet_to_json(workbook.Sheets[name], { header: 1, defval: '', raw: true });
+    const lines = [];
+    matrix.forEach((row, r) => {
+      if (lines.length >= 14) return;
+      const cells = row.map((v, c) => [c, String(v ?? '').trim()]).filter(([, t]) => t).slice(0, 6);
+      if (cells.length) lines.push(`ص${r + 1}: ` + cells.map(([c, t]) => `[${c}] ${t.slice(0, 28)}`).join(' | '));
+    });
+    return `شيت "${name}" (${matrix.length} صف) — ${lines.join(' ▸ ')}`;
+  } catch (error) {
+    return '';
+  }
 }
 
 async function getSchedule(file) {
@@ -643,6 +677,7 @@ async function prepareSchedule(file) {
     status.textContent = 'جاري قراءة Schedule واستخراج الأكواد...';
     const parsed = await getSchedule(file);
     scheduleCodeTotals = parsed.codeTotals;
+    scheduleDebugText = parsed.debug || '';
     renderCodeChips();
     status.textContent = parsed.index.size
       ? `تم قراءة Schedule • ${parsed.agents ? parsed.agents.size + ' موظف • ' : ''}${parsed.days.size} يوم • ${scheduleCodeTotals.size} كود • اختار الأكواد اللي تتحسب في Tele-SCH`
@@ -672,7 +707,11 @@ function renderCodeChips() {
   const entries = [...scheduleCodeTotals.entries()].sort((a, b) => b[1].secs - a[1].secs);
 
   if (!entries.length) {
-    box.innerHTML = '<span class="codes-empty">لا توجد أكواد داخل ملف Schedule</span>';
+    box.innerHTML = '';
+    const note = document.createElement('span');
+    note.className = 'codes-empty';
+    note.textContent = 'لا توجد أكواد داخل ملف Schedule' + (scheduleDebugText ? ` — شكل الملف: ${scheduleDebugText}` : '');
+    box.appendChild(note);
     return;
   }
 
@@ -806,12 +845,14 @@ function buildMatrix({ structureRows, utlRows, irRows, compRows, schedule, days,
         }
         const teleSchSeconds = scheduleSeconds ?? lookupFirst(structureDuration, [agent.teleoptiId], day);
 
+        // نفس معادلتك: Assigning = IF(Tele-SCH=0, 0, COUNTIFS(...)) — لما فيه Schedule مرفوع
+        const assigningShown = scheduleIndex.size > 0 && teleSchSeconds === 0 ? 0 : assigning;
         // Tele-SCH بيظهر بعد خصم الـ 90% (7:12:00 بدل 8:00:00)
         const teleSchAfterFactor = Math.round(teleSchSeconds * cfg.teleSchFactor);
         const lossSeconds = Math.max(0, teleSchAfterFactor - (systemSeconds + talkSeconds + compSeconds));
 
         perDay[day] = {
-          assigning,
+          assigning: assigningShown,
           tkt,
           system: formatTime(systemSeconds),
           talkTime: formatTime(talkSeconds),
@@ -902,7 +943,7 @@ async function processData() {
       if (diag.first) irText += ` | ${diag.first} → ${diag.last}`;
       irText += ')';
       if (!diag.addedMatched && diag.unmatched.length) irText += ` ⚠ أمثلة added_by مش مطابقة: ${diag.unmatched.join(', ')}`;
-      if (diag.rows && !diag.datesRead) irText += ' ⚠ مفيش تاريخ اتقرا من added_on';
+      if (diag.rows && !diag.datesRead) irText += ` ⚠ مفيش تاريخ اتقرا من added_on — أول قيمة: ${diag.sampleDate}`;
     }
 
     if (diag.last && collapsedDays[diag.last] !== undefined) collapsedDays[diag.last] = false; // نفتح آخر يوم فيه IR
